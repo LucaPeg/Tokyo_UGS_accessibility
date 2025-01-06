@@ -49,84 +49,75 @@ joined_330 = gpd.sjoin(parks330, census, how="inner", predicate="intersects")
 joined_660 = gpd.sjoin(parks660, census, how="inner", predicate="intersects")
 joined_1000 = gpd.sjoin(parks1000, census, how="inner", predicate="intersects")
 
-# Initialize the dictionary to store accessible census units for each park
-accessibility_dict = {}
+# Group the accesses layer by park_id and fetch the area for each park
+# Otherwise I get "None" as area value for 1200 parks. Even after filtering the ones without intersections.
 
+park_areas_from_access = accesses.groupby("park_id")["area"].first().to_dict()
 # Track which census units have already been assigned to each park
 assigned_centroids_per_park = defaultdict(set)
-# Step 1: Assign centroids to the smallest travel zone (330m)
+# initialize the dictionary that will contain the UGS-census unit relation
+accessibility_dict = {}
+# I add all parks. Previously I loaded the park areas in the 330m loop but it was incorrect
+# I got area = None for parks that had no intersections in the 330m area but had some in 660m or 1000m
+for park_id in park_areas_from_access:
+    accessibility_dict[park_id] = {
+        "park_area": int(park_areas_from_access[park_id]),
+        "330m": [],
+        "660m": [],
+        "1000m": []
+    }
+
+# Now process the 330m service area and update the parks with intersections
 for park_id, group in joined_330.groupby("park_id"):
-    unique_centroids = group["KEY_CODE_3"].unique()  # Get unique census units
+    unique_centroids = group["KEY_CODE_3"].unique()
     unassigned_centroids = [
         c for c in unique_centroids if c not in assigned_centroids_per_park[park_id]
-    ]  # Exclude already assigned
-    if unassigned_centroids:  # Only process parks with unassigned centroids
+    ]
+    if unassigned_centroids:
         park_area = group["area"].iloc[0]
         if pd.isna(park_area):
-            park_area = None  # Or handle it as needed, e.g., setting to 0 or skipping the park
+            park_area = None
         else:
-            park_area = int(park_area)  # Convert area to int if valid
+            park_area = int(park_area)
         
-        accessibility_dict.setdefault(park_id, {}).update(
-            {
-                "park_area": park_area,  # Add park area
-                "330m": unassigned_centroids,
-            }
-        )
-        # Mark these centroids as assigned for this park
+        accessibility_dict[park_id]["park_area"] = park_area  # Update park area
+        accessibility_dict[park_id]["330m"].extend(unassigned_centroids)
         assigned_centroids_per_park[park_id].update(unassigned_centroids)
 
-
-for park_id, group in joined_330.groupby("park_id"):
-    unique_centroids = group["KEY_CODE_3"].unique()  # Get unique census units
-    unassigned_centroids = [
-        c for c in unique_centroids if c not in assigned_centroids_per_park[park_id]
-    ]  # Exclude already assigned
-    if unassigned_centroids:  # Only process parks with unassigned centroids
-        accessibility_dict.setdefault(park_id, {}).update(
-            {
-                "park_area": int(group["area"].iloc[0]),  # Add park area
-                "330m": unassigned_centroids,
-            }
-        )
-        # Mark these centroids as assigned for this park
-        assigned_centroids_per_park[park_id].update(unassigned_centroids)
-
-# Step 2: Assign centroids to the 660m zone (excluding those already assigned in 330m)
+# Now process the 660m service area (excluding those already assigned in 330m)
 for park_id, group in joined_660.groupby("park_id"):
-    unique_centroids = group["KEY_CODE_3"].unique()  # Get unique census units
+    unique_centroids = group["KEY_CODE_3"].unique()
     unassigned_centroids = [
         c for c in unique_centroids if c not in assigned_centroids_per_park[park_id]
-    ]  # Exclude already assigned
+    ]
     if unassigned_centroids:
-        accessibility_dict.setdefault(park_id, {}).update(
-            {
-                "660m": unassigned_centroids,
-            }
-        )
-        # Mark these centroids as assigned for this park
+        accessibility_dict[park_id]["660m"].extend(unassigned_centroids)
         assigned_centroids_per_park[park_id].update(unassigned_centroids)
 
-# Step 3: Assign centroids to the 1000m zone (excluding those already assigned in 330m and 660m)
+# Finally, process the 1000m service area (excluding those already assigned in 330m and 660m)
 for park_id, group in joined_1000.groupby("park_id"):
-    unique_centroids = group["KEY_CODE_3"].unique()  # Get unique census units
+    unique_centroids = group["KEY_CODE_3"].unique()
     unassigned_centroids = [
         c for c in unique_centroids if c not in assigned_centroids_per_park[park_id]
-    ]  # Exclude already assigned
+    ]
     if unassigned_centroids:
-        accessibility_dict.setdefault(park_id, {}).update(
-            {
-                "1000m": unassigned_centroids,
-            }
-        )
-        # Mark these centroids as assigned for this park
+        accessibility_dict[park_id]["1000m"].extend(unassigned_centroids)
         assigned_centroids_per_park[park_id].update(unassigned_centroids)
 
-
-print(type(list(accessibility_dict.values())[0]))  # Check the type of the first value
-print(list(accessibility_dict.values())[0])  # Print the first value
 none_count = sum(1 for data in accessibility_dict.values() if data.get('park_area') is None)
-parks1000[parks1000['area'].isnull()]["park_id"].nunique()
+assert none_count == 0, "There are null values as park area value"
+
+#However a lot of parks have zero intersections in all the travel time zones.
+print(f"There are in {len(accessibility_dict.keys())} parks in the accessibility dictonary")
+
+# I filter out all the parks that have zero intersections
+filtered_accessibility_dict = {
+    park_id: data for park_id, data in accessibility_dict.items()
+    if data["330m"] or data["660m"] or data["1000m"]
+}
+
+print(f"{len(accessibility_dict.keys())- len(filtered_accessibility_dict.keys())} parks without interesctions removed")
+
 
 # GET THE UGS TO POPULATION RATIO
 # I will use park area as "supply" of UGS
@@ -142,7 +133,7 @@ weights = {
 ugs_population_ratio = {}
 
 # Loop through each park in the accessibility_dict to calculate the UGS-to-population ratio
-for park_id, park_data in accessibility_dict.items():
+for park_id, park_data in filtered_accessibility_dict.items():
     park_area = park_data.get("park_area")  # Area of the park
     total_weighted_population = 0  # initialize weighted pop
 
@@ -182,20 +173,25 @@ for park_id, park_data in accessibility_dict.items():
             0  # Handle cases where population might be zero or not assigned
         )
 
-# Now, ugs_population_ratio contains the UGS-to-population ratio for each park
 print(ugs_population_ratio)
-park_areas = {
-    park_id: data["park_area"] for park_id, data in accessibility_dict.items()
-}
-park_areas
+# check the distribution
+pd.Series(list(ugs_population_ratio.values())).describe() 
+pd.Series(list(ugs_population_ratio.values())).plot()
+#distribution is weird, most are around 0 but there are some extremely high values
 
-parks330[parks330["area"] == None]
+# get the largest ugs_population_ratio
+sorted(ugs_population_ratio.items(), key=lambda x: x[1], reverse=True)
 
-for park_id, data in accessibility_dict.items():
-    print(f"Park ID: {park_id}, Park Area Type: {type(data.get('park_area'))}")
+# get the set of the census units intersected by the parks with the highest ugs to pop ratio
+int_census_units = set()
+for park_id, data in filtered_accessibility_dict.items():
+    if park_id == 8200: #highest ugs_to_pop ratio
+        for zone in ['330m','660m','1000m']:
+            int_census_units.update(data[zone])
 
+# check the population -> I think here is where the problem lies
+for code in int_census_units:
+    print(census[census['KEY_CODE_3'] == code]['pop_tot']) # just one person lives there
+# if 1 person lives in the 1k catchmen, the UGS to pop ratio is: Area/0.03 -> skyrockets
 
-none_count = sum(1 for data in accessibility_dict.values() if data["park_area"] is None)
-print(f"Number of parks with None for park_area: {none_count}")
-
-print(accessibility_dict.items())
+# a solution would be to drop the census units below a population threshold.
