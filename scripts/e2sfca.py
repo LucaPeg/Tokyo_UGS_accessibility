@@ -15,11 +15,10 @@ parks330 = gpd.read_file(data, layer="parks330")
 parks660 = gpd.read_file(data, layer="parks660")
 parks1000 = gpd.read_file(data, layer="parks1000")  # this boy is like 8 GB
 
-# filter out small parks
+# filter out small parks (the merging process created some zero area entries)
 parks330 = parks330.query("area >= 30")
 parks660 = parks660.query("area >= 30")
 parks1000 = parks1000.query("area >= 30")
-
 
 # Census catchement areas
 census = gpd.read_file(data, layer="census_centroids")
@@ -27,7 +26,7 @@ census = gpd.read_file(data, layer="census_centroids")
 # census660 = gpd.read_file(data, layer = 'census660')
 # census1000 = gpd.read_file(data, layer = 'census1000')
 
-# fix census datatypes
+# fix census datatypes (they are almost all 'objects' otherwise)
 string_columns = ["KEY_CODE_3", "name_ja", "name_en"]
 for col in census.columns:
     if col not in string_columns and col != "geometry":
@@ -144,19 +143,16 @@ for park_id, park_data in filtered_accessibility_dict.items():
             # For each census unit in this zone, sum the population and multiply by the zone's weight
             population_sum = 0
             if zone == "330m":
-                # For 330m zone, use joined_330
                 for centroid in centroids:
                     population_sum += census[census["KEY_CODE_3"] == centroid][
                         population_col
                     ].sum()
             elif zone == "660m":
-                # For 660m zone, use joined_660
                 for centroid in centroids:
                     population_sum += census[census["KEY_CODE_3"] == centroid][
                         population_col
                     ].sum()
             elif zone == "1000m":
-                # For 1000m zone, use joined_1000
                 for centroid in centroids:
                     population_sum += census[census["KEY_CODE_3"] == centroid][
                         population_col
@@ -175,7 +171,7 @@ for park_id, park_data in filtered_accessibility_dict.items():
 
 print(ugs_population_ratio)
 # check the distribution
-pd.Series(list(ugs_population_ratio.values())).describe() 
+pd.Series(list(ugs_population_ratio.values())).describe()
 pd.Series(list(ugs_population_ratio.values())).plot()
 #distribution is weird, most are around 0 but there are some extremely high values
 
@@ -195,3 +191,13 @@ for code in int_census_units:
 # if 1 person lives in the 1k catchmen, the UGS to pop ratio is: Area/0.03 -> skyrockets
 
 # a solution would be to drop the census units below a population threshold.
+# explore the census data
+census['pop_tot'].describe() # 5818 census units, mean 1252 people
+census['pop_tot'].plot(kind='hist', bins=100)
+census[census['pop_tot']>3000]["KEY_CODE_3"].nunique() # 41 census units above 4000
+census[census['pop_tot']>4000]["KEY_CODE_3"].nunique() # 3 census units above 4000
+census[census['pop_tot']<10]["KEY_CODE_3"].nunique() # 43 census units below 100
+census[census['pop_tot']<50]["KEY_CODE_3"].nunique() # 109 census units below 100
+census[census['pop_tot']<100]["KEY_CODE_3"].nunique() # 155 census units below 100
+
+# filter the
