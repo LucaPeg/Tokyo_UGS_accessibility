@@ -3,6 +3,8 @@ import pandas as pd
 import os
 import fiona
 from collections import defaultdict
+import contextily as ctx
+import matplotlib.pyplot as plt
 
 # IMPORT LAYERS
 data = os.path.join("..\\data\\final\\Tokyo_UGS_accessibility.gpkg")
@@ -108,7 +110,6 @@ assert none_count == 0, "There are null values as park area value"
 
 #However a lot of parks have zero intersections in all the travel time zones.
 print(f"There are in {len(accessibility_dict.keys())} parks in the accessibility dictonary")
-
 # I filter out all the parks that have zero intersections
 filtered_accessibility_dict = {
     park_id: data for park_id, data in accessibility_dict.items()
@@ -200,4 +201,80 @@ census[census['pop_tot']<10]["KEY_CODE_3"].nunique() # 43 census units below 100
 census[census['pop_tot']<50]["KEY_CODE_3"].nunique() # 109 census units below 100
 census[census['pop_tot']<100]["KEY_CODE_3"].nunique() # 155 census units below 100
 
-# filter the
+# filter the "outliers"
+o3000 = list(census[census['pop_tot']>3000]["KEY_CODE_3"].unique())
+o4000 = list(census[census['pop_tot']>4000]["KEY_CODE_3"].unique())
+u100 = list(census[census['pop_tot']<100]["KEY_CODE_3"].unique())
+u50 = list(census[census['pop_tot']<50]["KEY_CODE_3"].unique())
+u10 = list(census[census['pop_tot']<10]["KEY_CODE_3"].unique())
+
+# The following assignment should be integrated in the function below
+census_o3000 = census[census['KEY_CODE_3'].isin(o3000)]
+census_o4000 = census[census['KEY_CODE_3'].isin(o4000)]
+census_u100 = census[census['KEY_CODE_3'].isin(u100)]
+census_u50 = census[census['KEY_CODE_3'].isin(u50)]
+census_u10 = census[census["KEY_CODE_3"].isin(u10)]
+
+def plot_census_points_with_basemap(
+    gdf, 
+    buffer_factor=1.5, 
+    title="Filtered Census Points in Tokyo (23 Special Wards)", 
+    color="red", 
+    markersize=10, 
+    alpha=0.7, 
+    basemap_source=ctx.providers.CartoDB.Positron,
+    zoom=10
+):
+    """
+    Plot census points on a basemap with adjustable parameters.
+    
+    Parameters:
+        gdf (GeoDataFrame): GeoDataFrame to plot (must include geometries).
+        buffer_factor (float): Factor to expand map bounds for zooming out.
+        title (str): Title for the plot.
+        color (str): Color of the points.
+        markersize (int): Size of the points.
+        alpha (float): Transparency of the points.
+        basemap_source: Contextily basemap source.
+        zoom (int): Optional zoom level for the basemap.
+    """
+    gdf = gdf.to_crs(epsg=3857) # for baseline compatibility
+    
+    # get bounds so I can increase them when I have small area
+    bounds = gdf.total_bounds  # [minx, miny, maxx, maxy]
+
+    # Expand the bounds to zoom out
+    x_range = bounds[2] - bounds[0]
+    y_range = bounds[3] - bounds[1]
+
+    expanded_bounds = [
+        bounds[0] - x_range * (buffer_factor - 1),  # Min X
+        bounds[1] - y_range * (buffer_factor - 1),  # Min Y
+        bounds[2] + x_range * (buffer_factor - 1),  # Max X
+        bounds[3] + y_range * (buffer_factor - 1),  # Max Y
+    ]
+
+    # Plot the census points
+    fig, ax = plt.subplots(figsize=(12, 12))
+    gdf.plot(ax=ax, color=color, markersize=markersize, alpha=alpha, label="Filtered Census Units")
+
+    # Add the basemap
+    ctx.add_basemap(ax, source=basemap_source, zoom=zoom)
+
+    # Set the expanded bounds as limits
+    ax.set_xlim(expanded_bounds[0], expanded_bounds[2])  # Set x-axis limits
+    ax.set_ylim(expanded_bounds[1], expanded_bounds[3])  # Set y-axis limits
+
+    # Customize the plot
+    ax.set_title(title, fontsize=16)
+    ax.legend(loc="upper left")
+    ax.axis("off")  # Turn off axis labels
+
+    # Show the plot
+    plt.show()
+    
+plot_census_points_with_basemap(census_o3000)
+plot_census_points_with_basemap(census_o4000, buffer_factor=5)
+plot_census_points_with_basemap(census_u100)
+plot_census_points_with_basemap(census_u50)
+plot_census_points_with_basemap(census_u10)
