@@ -8,14 +8,23 @@ import matplotlib.pyplot as plt
 
 # IMPORT LAYERS
 data = os.path.join("..\\data\\final\\Tokyo_UGS_accessibility.gpkg")
-# print(fiona.listlayers(data))
+print(fiona.listlayers(data))
 
+accesses = gpd.read_file(data, layer='park_accesses')
+parks330 = gpd.read_file(data, layer="sa_parks330")
+parks660 = gpd.read_file(data, layer="sa_parks660")
+parks1000 = gpd.read_file(data, layer="sa_parks1000")  
 
-# Parks catchement areas
-accesses = gpd.read_file(data, layer="cleaned_park_accesses")
-parks330 = gpd.read_file(data, layer="parks330")
-parks660 = gpd.read_file(data, layer="parks660")
-parks1000 = gpd.read_file(data, layer="parks1000")  # this boy is like 8 GB
+# service areas check
+# check length
+parks330.geometry.length.describe()
+parks660[parks330.geometry.length == 0].count() # 26 parks with no service area
+# technically not an issue, since e2sfca algorithm sorts this out (maybe not optimized)
+
+# check areas
+parks330['area'].describe()
+parks330[parks330['area'] <= 30].count() # 87 parks below 30sqm
+# very small parks (assume below 30sqm) are due to merging process errors
 
 # filter out small parks (the merging process created some zero area entries)
 parks330 = parks330.query("area >= 30")
@@ -28,7 +37,7 @@ census = gpd.read_file(data, layer="census_centroids")
 # census660 = gpd.read_file(data, layer = 'census660')
 # census1000 = gpd.read_file(data, layer = 'census1000')
 
-# fix census datatypes (they are almost all 'objects' otherwise)
+# fix census datatypes (they are almost all 'objects')
 string_columns = ["KEY_CODE_3", "name_ja", "name_en"]
 for col in census.columns:
     if col not in string_columns and col != "geometry":
@@ -41,9 +50,7 @@ for col in census.columns:
 # STEP 1: get UGS to population ratios ################################
 ########################################################################
 
-# Before starting, some checks
-# parks330[parks330.geometry.length == 0].count()  # there are 27 parks with no service area
-# parks330.geometry.length.describe()
+
 
 # Associate each park access with the census units it intersects
 joined_330 = gpd.sjoin(parks330, census, how="inner", predicate="intersects")
@@ -54,8 +61,7 @@ joined_1000 = gpd.sjoin(parks1000, census, how="inner", predicate="intersects")
 # Otherwise I get "None" as area value for 1200 parks. Even after filtering the ones without intersections.
 
 park_areas_from_access = accesses.groupby("park_id")["area"].first().to_dict()
-# Track which census units have already been assigned to each park
-assigned_centroids_per_park = defaultdict(set)
+assigned_centroids_per_park = defaultdict(set) # track census units for each park
 # initialize the dictionary that will contain the UGS-census unit relation
 accessibility_dict = {}
 # I add all parks. Previously I loaded the park areas in the 330m loop but it was incorrect
@@ -182,7 +188,7 @@ sorted(ugs_population_ratio.items(), key=lambda x: x[1], reverse=True)
 # get the set of the census units intersected by the parks with the highest ugs to pop ratio
 int_census_units = set()
 for park_id, data in filtered_accessibility_dict.items():
-    if park_id == 8200: #highest ugs_to_pop ratio
+    if park_id == 5036: #highest ugs_to_pop ratio
         for zone in ['330m','660m','1000m']:
             int_census_units.update(data[zone])
 
