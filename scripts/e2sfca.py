@@ -6,6 +6,8 @@ from collections import defaultdict
 import contextily as ctx
 import matplotlib.pyplot as plt
 
+from accessibility_functions import get_accessibility_dict
+from accessibility_functions import get_ugs_to_pop_ratios
 # IMPORT LAYERS
 data = os.path.join("..\\data\\final\\Tokyo_UGS_accessibility.gpkg")
 print(fiona.listlayers(data))
@@ -18,7 +20,7 @@ parks1000 = gpd.read_file(data, layer="sa_parks1000")
 # service areas check
 # check length
 parks330.geometry.length.describe()
-parks660[parks330.geometry.length == 0].count() # 26 parks with no service area
+parks330[parks330.geometry.length == 0].count() # 26 parks with no service area
 # technically not an issue, since e2sfca algorithm sorts this out (maybe not optimized)
 
 # check areas
@@ -43,89 +45,23 @@ for col in census.columns:
     if col not in string_columns and col != "geometry":
         census[col] = pd.to_numeric(census[col], errors="coerce", downcast="integer")
 
+#TODO apply accessibility function to different subset of parks (by size)
+#TODO clean census units
+# there are census units with very low population count
+# low values in pop affect the ugs to population ratio
+
+
 
 ########################################################################
 # E2SFCA  ##############################################################
 ########################################################################
 # STEP 1: get UGS to population ratios ################################
 ########################################################################
-
-
-
-# Associate each park access with the census units it intersects
-joined_330 = gpd.sjoin(parks330, census, how="inner", predicate="intersects")
-joined_660 = gpd.sjoin(parks660, census, how="inner", predicate="intersects")
-joined_1000 = gpd.sjoin(parks1000, census, how="inner", predicate="intersects")
-
-# Group the accesses layer by park_id and fetch the area for each park
-# Otherwise I get "None" as area value for 1200 parks. Even after filtering the ones without intersections.
-
-park_areas_from_access = accesses.groupby("park_id")["area"].first().to_dict()
-assigned_centroids_per_park = defaultdict(set) # track census units for each park
-# initialize the dictionary that will contain the UGS-census unit relation
-accessibility_dict = {}
-# I add all parks. Previously I loaded the park areas in the 330m loop but it was incorrect
-# I got area = None for parks that had no intersections in the 330m area but had some in 660m or 1000m
-for park_id in park_areas_from_access:
-    accessibility_dict[park_id] = {
-        "park_area": int(park_areas_from_access[park_id]),
-        "330m": [],
-        "660m": [],
-        "1000m": []
-    }
-
-# Now process the 330m service area and update the parks with intersections
-for park_id, group in joined_330.groupby("park_id"):
-    unique_centroids = group["KEY_CODE_3"].unique()
-    unassigned_centroids = [
-        c for c in unique_centroids if c not in assigned_centroids_per_park[park_id]
-    ]
-    if unassigned_centroids:
-        park_area = group["area"].iloc[0]
-        if pd.isna(park_area):
-            park_area = None
-        else:
-            park_area = int(park_area)
-        
-        accessibility_dict[park_id]["park_area"] = park_area  # Update park area
-        accessibility_dict[park_id]["330m"].extend(unassigned_centroids)
-        assigned_centroids_per_park[park_id].update(unassigned_centroids)
-
-# Now process the 660m service area (excluding those already assigned in 330m)
-for park_id, group in joined_660.groupby("park_id"):
-    unique_centroids = group["KEY_CODE_3"].unique()
-    unassigned_centroids = [
-        c for c in unique_centroids if c not in assigned_centroids_per_park[park_id]
-    ]
-    if unassigned_centroids:
-        accessibility_dict[park_id]["660m"].extend(unassigned_centroids)
-        assigned_centroids_per_park[park_id].update(unassigned_centroids)
-
-# Finally, process the 1000m service area (excluding those already assigned in 330m and 660m)
-for park_id, group in joined_1000.groupby("park_id"):
-    unique_centroids = group["KEY_CODE_3"].unique()
-    unassigned_centroids = [
-        c for c in unique_centroids if c not in assigned_centroids_per_park[park_id]
-    ]
-    if unassigned_centroids:
-        accessibility_dict[park_id]["1000m"].extend(unassigned_centroids)
-        assigned_centroids_per_park[park_id].update(unassigned_centroids)
-
-none_count = sum(1 for data in accessibility_dict.values() if data.get('park_area') is None)
-assert none_count == 0, "There are null values as park area value"
-
-#However a lot of parks have zero intersections in all the travel time zones.
-print(f"There are in {len(accessibility_dict.keys())} parks in the accessibility dictonary")
-# I filter out all the parks that have zero intersections
-filtered_accessibility_dict = {
-    park_id: data for park_id, data in accessibility_dict.items()
-    if data["330m"] or data["660m"] or data["1000m"]
-}
-
-print(f"{len(accessibility_dict.keys())- len(filtered_accessibility_dict.keys())} parks without interesctions removed")
-
+accessibility_dict1 = get_accessibility_dict(accesses, parks330, parks660, parks1000, census)
 
 # GET THE UGS TO POPULATION RATIO
+
+ugs_pop_ratios = get_ugs_to_pop_ratios(accessibility_dict1, census)
 # I will use park area as "supply" of UGS
 population_col = "pop_tot"
 
@@ -139,7 +75,7 @@ weights = {
 ugs_population_ratio = {}
 
 # Loop through each park in the accessibility_dict to calculate the UGS-to-population ratio
-for park_id, park_data in filtered_accessibility_dict.items():
+for park_id, park_data in accessibility_dict1.items():
     park_area = park_data.get("park_area")  # Area of the park
     total_weighted_population = 0  # initialize weighted pop
 
