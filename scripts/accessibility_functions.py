@@ -3,7 +3,6 @@ import pandas as pd
 from collections import defaultdict
 import contextily as ctx
 import matplotlib.pyplot as plt
-import os
 
 
 def get_accessibility_dict(accesses, parks330, parks660, parks1000, census):
@@ -137,8 +136,8 @@ def plot_census_points_with_basemap(
     color="red",
     markersize=10,
     alpha=0.7,
-    basemap_source=ctx.providers.CartoDB.Positron,
     zoom=10,
+    basemap_source=ctx.providers.CartoDB.Positron,
 ):
     """
     Plot census points on a basemap with adjustable parameters.
@@ -203,3 +202,47 @@ def plot_census_points_with_basemap(
 
     # Show the plot
     plt.show()
+
+
+def get_census_served(parks, accessibility): 
+    """
+    Given a list of parks and the accessibility dictionary, yields the respective census units
+        Args:
+        parks (list): list of the park_id of interests
+        accessibilit (dict): accessibility dictionary obtained with the function above
+
+    Returns:
+        dict:{park_id : [list of census units]}
+    """   
+    tt_zones = ['330m', '660m','1000m']
+    filt_accessibility = {key: accessibility[key] for key in parks if key in accessibility}
+    park_service = {}
+    for park_id, park_data in filt_accessibility.items():    
+        serviced_centroids = []
+        for key, data in park_data.items():
+            if key in tt_zones:
+                for centroid in data:
+                    serviced_centroids.append(centroid)
+            park_service[park_id] = serviced_centroids
+    return park_service
+
+def get_people_served(parks, accessibility, census):
+    """Given a list of parks and the census geodataframe, yields for each park how many people it serves.
+
+    Args:
+        parks (list): list of park you want to check
+        accessibility: accessibility dictionary
+        census (_type_): census geodataframe, whose population columns is called "pop_tot"
+
+    Returns:
+        _dict_: {park_id : total_people_served}
+    """
+    park_service = get_census_served(parks, accessibility)
+    people_served = {}
+    for park_id, census_units in park_service.items():
+        park_population = 0
+        for census_unit in census_units:
+            census_pop = int(census.loc[census["KEY_CODE_3"]==census_unit, 'pop_tot'].iloc[0])
+            park_population += census_pop
+        people_served[park_id] = park_population
+    return people_served

@@ -8,6 +8,8 @@ import matplotlib.pyplot as plt
 
 from accessibility_functions import get_accessibility_dict
 from accessibility_functions import get_ugs_to_pop_ratios
+from accessibility_functions import plot_census_points_with_basemap
+
 
 # IMPORT LAYERS
 data = os.path.join("..\\data\\final\\Tokyo_UGS_accessibility.gpkg")
@@ -36,18 +38,40 @@ parks1000 = parks1000.query("area >= 30")
 
 # Census catchement areas
 census = gpd.read_file(data, layer="census_centroids")
-# census330 = gpd.read_file(data, layer = 'census330')
-# census660 = gpd.read_file(data, layer = 'census660')
-# census1000 = gpd.read_file(data, layer = 'census1000')
+census330 = gpd.read_file(data, layer="census330")
+census660 = gpd.read_file(data, layer="census660")
+census1000 = gpd.read_file(data, layer="census1000")
 
 # fix census datatypes (they are almost all 'objects')
+census_list = [census, census330, census660, census1000]
 string_columns = ["KEY_CODE_3", "name_ja", "name_en"]
 for col in census.columns:
     if col not in string_columns and col != "geometry":
-        census[col] = pd.to_numeric(census[col], errors="coerce", downcast="integer")
+        for i in range(len(census_list)):
+            census_list[i][col] = pd.to_numeric(
+                census_list[i][col], errors="coerce", downcast="integer"
+            )
+
+# exploring census dataframe
+census["pop_tot"].describe()  # 5818 census units, mean 1252 people
+census["pop_tot"].plot(kind="hist", bins=100)
+census.pop_tot.quantile(0.01)  # 1 percentile is 14.17 people per census unit
+census.pop_tot.quantile(0.99)  # 99 percentile is 2830
+census.pop_tot.isna().sum()  # 269 NAs
+plot_census_points_with_basemap(census, "under", threshold=15)
+plot_census_points_with_basemap(census, "over", 3500)
+# low population values affect the UGS to population ratios
+
+## MAYBE I SHOULD SKIP THIS AND JUST DROP THE PARKS WITH FEW PEOPLE SERVED
+# I trim out the census points below the 1st percentile
+for i in range(len(census_list)):
+    census_list[i] = census_list[i][census_list[i]["pop_tot"] > 15]  # Drop 1st percentile population
+    census_list[i] = census_list[i].dropna(subset=["pop_tot"])  # Drop NAs
+
+census, census330, census660, census1000 = census_list
 
 # TODO apply accessibility function to different subset of parks (by size)
-# TODO clean census units
+# TODO add the UGS to population ratio to each park access
 # there are census units with very low population count
 # low values in pop affect the ugs to population ratio
 
@@ -57,126 +81,43 @@ for col in census.columns:
 ########################################################################
 # STEP 1: get UGS to population ratios ################################
 ########################################################################
-accessibility_dict = get_accessibility_dict(
+accessibility_dict = get_accessibility_dict(  # defined in accessibility_functions.py
     accesses, parks330, parks660, parks1000, census
 )
 
-ugs_to_pop_ratios = get_ugs_to_pop_ratios(accessibility_dict, census)
+ugs_to_pop_ratios = get_ugs_to_pop_ratios(accessibility_dict, census)  # same as above
 
 # check the distribution
 pd.Series(list(ugs_to_pop_ratios.values())).describe()
 pd.Series(list(ugs_to_pop_ratios.values())).plot()
 # distribution is weird, most are around 0 but there are some extremely high values
 
-# get the largest ugs_population_ratio
-sorted(ugs_to_pop_ratios.items(), key=lambda x: x[1], reverse=True)
+# I want to extract the parks with highest ugspop ratio and check 
+# 1. How many cenusus units they serve
+# 2. How many people live in total in those census units
+top_parks = sorted(ugs_to_pop_ratios.items(), key=lambda x: x[1], reverse=True)
+top_parks = [t[0] for t in top_parks]
 
-# get the set of the census units intersected by the parks with the highest ugs to pop ratio
-int_census_units = set()
-for park_id, data in accessibility_dict.items():
-    if park_id == 5036:  # highest ugs_to_pop ratio
-        for zone in ["330m", "660m", "1000m"]:
-            int_census_units.update(data[zone])
+for park in top_parks:
+    print(accessibility_dict[park])
+    
+# does it make sense to remove the census units with few people?
+# This increases the UGS to population ratios of some parks (while zeroes some others)
+# Another solution would be to eliminate from the accessibility dict the parks that serve 
+#   less than a threshold of people (let's say 50)
+#   This allows to preserve information about the census units, while tackling the high ugs ratios
 
-# check the population -> I think here is where the problem lies
-for code in int_census_units:
-    print(
-        census[census["KEY_CODE_3"] == code]["pop_tot"]
-    )  # just one person lives there
-# if 1 person lives in the 1k catchmen, the UGS to pop ratio is: Area/0.03 -> skyrockets
+from accessibility_functions import get_census_served
+from accessibility_functions import get_people_served 
 
-# a solution would be to drop the census units below a population threshold.
-# explore the census data
-census["pop_tot"].describe()  # 5818 census units, mean 1252 people
-census["pop_tot"].plot(kind="hist", bins=100)
-census[census["pop_tot"] > 3000]["KEY_CODE_3"].nunique()  # 41 census units above 4000
-census[census["pop_tot"] > 4000]["KEY_CODE_3"].nunique()  # 3 census units above 4000
-census[census["pop_tot"] < 10]["KEY_CODE_3"].nunique()  # 43 census units below 100
-census[census["pop_tot"] < 50]["KEY_CODE_3"].nunique()  # 109 census units below 100
-census[census["pop_tot"] < 100]["KEY_CODE_3"].nunique()  # 155 census units below 100
-
-# filter the "outliers"
-o3000 = list(census[census["pop_tot"] > 3000]["KEY_CODE_3"].unique())
-o4000 = list(census[census["pop_tot"] > 4000]["KEY_CODE_3"].unique())
-u100 = list(census[census["pop_tot"] < 100]["KEY_CODE_3"].unique())
-u50 = list(census[census["pop_tot"] < 50]["KEY_CODE_3"].unique())
-u10 = list(census[census["pop_tot"] < 10]["KEY_CODE_3"].unique())
-
-# The following assignment should be integrated in the function below
-census_o3000 = census[census["KEY_CODE_3"].isin(o3000)]
-census_o4000 = census[census["KEY_CODE_3"].isin(o4000)]
-census_u100 = census[census["KEY_CODE_3"].isin(u100)]
-census_u50 = census[census["KEY_CODE_3"].isin(u50)]
-census_u10 = census[census["KEY_CODE_3"].isin(u10)]
+census_for_each_park = get_census_served(top_parks, accessibility_dict)
+people_for_each_park = get_people_served(top_parks, accessibility_dict, census) # if I run everything this works
+# why was it giving problems before, then?
+pd.Series(list(people_for_each_park.values())).describe()
+pd.Series(list(people_for_each_park.values())).quantile(0.01)
 
 
-def plot_census_points_with_basemap(
-    gdf,
-    buffer_factor=1.5,
-    title="Filtered Census Points in Tokyo (23 Special Wards)",
-    color="red",
-    markersize=10,
-    alpha=0.7,
-    basemap_source=ctx.providers.CartoDB.Positron,
-    zoom=10,
-):
-    """
-    Plot census points on a basemap with adjustable parameters.
+############################################################################################
+## STEP 2: for each census unit, sum the ratios of the parks it can access #################
+############################################################################################
 
-    Parameters:
-        gdf (GeoDataFrame): GeoDataFrame to plot (must include geometries).
-        buffer_factor (float): Factor to expand map bounds for zooming out.
-        title (str): Title for the plot.
-        color (str): Color of the points.
-        markersize (int): Size of the points.
-        alpha (float): Transparency of the points.
-        basemap_source: Contextily basemap source.
-        zoom (int): Optional zoom level for the basemap.
-    """
-    gdf = gdf.to_crs(epsg=3857)  # for baseline compatibility
-
-    # get bounds so I can increase them when I have small area
-    bounds = gdf.total_bounds  # [minx, miny, maxx, maxy]
-
-    # Expand the bounds to zoom out
-    x_range = bounds[2] - bounds[0]
-    y_range = bounds[3] - bounds[1]
-
-    expanded_bounds = [
-        bounds[0] - x_range * (buffer_factor - 1),  # Min X
-        bounds[1] - y_range * (buffer_factor - 1),  # Min Y
-        bounds[2] + x_range * (buffer_factor - 1),  # Max X
-        bounds[3] + y_range * (buffer_factor - 1),  # Max Y
-    ]
-
-    # Plot the census points
-    fig, ax = plt.subplots(figsize=(12, 12))
-    gdf.plot(
-        ax=ax,
-        color=color,
-        markersize=markersize,
-        alpha=alpha,
-        label="Filtered Census Units",
-    )
-
-    # Add the basemap
-    ctx.add_basemap(ax, source=basemap_source, zoom=zoom)
-
-    # Set the expanded bounds as limits
-    ax.set_xlim(expanded_bounds[0], expanded_bounds[2])  # Set x-axis limits
-    ax.set_ylim(expanded_bounds[1], expanded_bounds[3])  # Set y-axis limits
-
-    # Customize the plot
-    ax.set_title(title, fontsize=16)
-    ax.legend(loc="upper left")
-    ax.axis("off")  # Turn off axis labels
-
-    # Show the plot
-    plt.show()
-
-
-plot_census_points_with_basemap(census_o3000)
-plot_census_points_with_basemap(census_o4000, buffer_factor=5)
-plot_census_points_with_basemap(census_u100)
-plot_census_points_with_basemap(census_u50)
-plot_census_points_with_basemap(census_u10)
