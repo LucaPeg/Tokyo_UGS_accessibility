@@ -65,15 +65,14 @@ plot_census_points_with_basemap(census, "over", 3500)
 ## MAYBE I SHOULD SKIP THIS AND JUST DROP THE PARKS WITH FEW PEOPLE SERVED
 # I trim out the census points below the 1st percentile
 for i in range(len(census_list)):
-    census_list[i] = census_list[i][census_list[i]["pop_tot"] > 15]  # Drop 1st percentile population
+    #census_list[i] = census_list[i][census_list[i]["pop_tot"] > 15]  # Drop 1st percentile population
     census_list[i] = census_list[i].dropna(subset=["pop_tot"])  # Drop NAs
 
 census, census330, census660, census1000 = census_list
 
 # TODO apply accessibility function to different subset of parks (by size)
 # TODO add the UGS to population ratio to each park access
-# there are census units with very low population count
-# low values in pop affect the ugs to population ratio
+# there are census units with very low population count low values in pop affect the ugs to population ratio
 
 
 ########################################################################
@@ -96,11 +95,12 @@ pd.Series(list(ugs_to_pop_ratios.values())).plot()
 # 1. How many cenusus units they serve
 # 2. How many people live in total in those census units
 top_parks = sorted(ugs_to_pop_ratios.items(), key=lambda x: x[1], reverse=True)
-top_parks = [t[0] for t in top_parks]
-
+top_parks = [t[0] for t in top_parks[:20]]
+all_parks = list(ugs_to_pop_ratios.keys())
 for park in top_parks:
     print(accessibility_dict[park])
-    
+
+
 # does it make sense to remove the census units with few people?
 # This increases the UGS to population ratios of some parks (while zeroes some others)
 # Another solution would be to eliminate from the accessibility dict the parks that serve 
@@ -108,16 +108,43 @@ for park in top_parks:
 #   This allows to preserve information about the census units, while tackling the high ugs ratios
 
 from accessibility_functions import get_census_served
-from accessibility_functions import get_people_served 
+from accessibility_functions import get_people_served
 
-census_for_each_park = get_census_served(top_parks, accessibility_dict)
-people_for_each_park = get_people_served(top_parks, accessibility_dict, census) # if I run everything this works
+census_for_top_parks = get_census_served(top_parks, accessibility_dict)
+people_for_top_parks = get_people_served(top_parks, accessibility_dict, census) # if I run everything this works
+people_for_all_parks = get_people_served(all_parks, accessibility_dict, census)
+
 # why was it giving problems before, then?
-pd.Series(list(people_for_each_park.values())).describe()
-pd.Series(list(people_for_each_park.values())).quantile(0.01)
+pd.Series(list(people_for_all_parks.values())).describe()
+pd.Series(list(people_for_all_parks.values())).plot(kind='hist',bins=100)
+pd.Series(list(people_for_all_parks.values())).quantile(0.01)
 
+pd.Series(list(people_for_top_parks.values())).describe()
+pd.Series(list(people_for_top_parks.values())).plot(kind='hist')
+
+# final substep: add UGS_to_pop ratio to "accesses" geodataframe
+accesses["ugs_ratio"] = accesses["park_id"].map(ugs_to_pop_ratios)
+
+
+
+### FILTERING ###################################################################################
+# now I could drop from the accesses datarframe the parks below a certain people-served threshold
+# also here I should probably subset the parks to get accessibility for different categories
+#################################################################################################
+# how many parks have less than 100 people in their catchment area?
+len({key : value for key, value in people_for_all_parks.items() if value < 713}) # 78 parks
+len(dict(filter(lambda x: x[1] < 100, people_for_all_parks.items()))) # same as above
+
+# I filter the 1st percentile of parks by population served
+relevant_parks = dict(filter(lambda x: x[1] > 713, people_for_all_parks.items()))
+relevant_parks = list(relevant_parks.keys())
+filtered_accesses = accesses[accesses['park_id'].isin(relevant_parks)]
 
 ############################################################################################
 ## STEP 2: for each census unit, sum the ratios of the parks it can access #################
 ############################################################################################
 
+from accessibility_functions import get_census_catchment
+
+
+census_catchements = get_census_catchment(filtered_accesses, census330, census660, census1000, census)

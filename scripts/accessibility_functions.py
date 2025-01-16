@@ -73,7 +73,6 @@ def get_accessibility_dict(accesses, parks330, parks660, parks1000, census):
 
     return filtered_accessibility_dict
 
-
 def get_ugs_to_pop_ratios(accessibility, census_centroids, weights=None):
     """
     Starting from the accessibility dictionary, this function yields the ugs to population ratios
@@ -125,7 +124,6 @@ def get_ugs_to_pop_ratios(accessibility, census_centroids, weights=None):
             ugs_population_ratio[park_id] = 0  # is it best to use 0 or None?
 
     return ugs_population_ratio
-
 
 def plot_census_points_with_basemap(
     census_gdf,
@@ -203,7 +201,6 @@ def plot_census_points_with_basemap(
     # Show the plot
     plt.show()
 
-
 def get_census_served(parks, accessibility): 
     """
     Given a list of parks and the accessibility dictionary, yields the respective census units
@@ -246,3 +243,67 @@ def get_people_served(parks, accessibility, census):
             park_population += census_pop
         people_served[park_id] = park_population
     return people_served
+
+def get_census_catchment(accesses, census330, census660, census1000, census):
+    """Given the park accesses and the census units, returns the parks accessible from each census unit
+
+    Args:
+        accesses (_geodataframe_): park access dataframe containing access points and information on parks
+        census330 (_geodataframe_): 330m service area around each census unit centroid 
+        census660 (_geodataframe_): 660m service area around each census unit centroid
+        census1000 (_geodataframe_): 1000m service area around each census unit centroid
+        census (_geodataframe_): geodataframe of all the snapped centroids units
+    Returns:
+        dict: dictionary whose key is the census id. The values are dictionaries for the three travel time zones.
+    """
+    census_catchment = {}  # initialize empty dictionary
+    assigned_park_per_census = defaultdict(set)
+    for census_id in census['KEY_CODE_3']:
+        census_catchment[census_id] = {
+            "330m": [],
+            "660m": [],
+            "1000m": [],
+        }
+
+    joined_330 = gpd.sjoin(census330, accesses, how="inner", predicate="intersects")
+    joined_660 = gpd.sjoin(census660, accesses, how="inner", predicate="intersects")
+    joined_1000 = gpd.sjoin(census1000, accesses, how="inner", predicate="intersects")
+
+    for census_id, group in joined_330.groupby("KEY_CODE_3"):
+        unique_parks = group["park_id"].unique()
+        unassigned_parks = [
+             int(c) for c in unique_parks if c not in assigned_park_per_census[census_id]
+        ]
+        if unassigned_parks:
+            census_catchment[census_id]["330m"].extend(unassigned_parks)
+            assigned_park_per_census[census_id].update(unassigned_parks)
+
+    # Now process the 660m service area (excluding those already assigned in 330m)
+    for census_id, group in joined_660.groupby("KEY_CODE_3"):
+        unique_parks = group["park_id"].unique()
+        unassigned_parks = [
+             int(c) for c in unique_parks if c not in assigned_park_per_census[census_id]
+        ]
+        if unassigned_parks:
+            census_catchment[census_id]["660m"].extend(unassigned_parks)
+            assigned_park_per_census[census_id].update(unassigned_parks)
+
+
+    # Finally, process the 1000m service area (excluding those already assigned in 330m and 660m)
+    for census_id, group in joined_1000.groupby("KEY_CODE_3"):
+        unique_parks = group["park_id"].unique()
+        unassigned_parks = [
+            int(c) for c in unique_parks if c not in assigned_park_per_census[census_id]
+        ]
+        if unassigned_parks:
+            census_catchment[census_id]["1000m"].extend(unassigned_parks)
+            assigned_park_per_census[census_id].update(unassigned_parks)
+
+
+    filtered_census_catchment = {
+        census_id: data 
+        for census_id, data in census_catchment.items() 
+        if data["330m"] or data["660m"] or data["1000m"]
+    }
+
+    return filtered_census_catchment
