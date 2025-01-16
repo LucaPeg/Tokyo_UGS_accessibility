@@ -88,7 +88,6 @@ ugs_to_pop_ratios = get_ugs_to_pop_ratios(accessibility_dict, census)  # same as
 
 # check the distribution
 pd.Series(list(ugs_to_pop_ratios.values())).describe()
-pd.Series(list(ugs_to_pop_ratios.values())).plot()
 # distribution is weird, most are around 0 but there are some extremely high values
 
 # I want to extract the parks with highest ugspop ratio and check 
@@ -145,6 +144,21 @@ filtered_accesses = accesses[accesses['park_id'].isin(relevant_parks)]
 ############################################################################################
 
 from accessibility_functions import get_census_catchment
-
-
 census_catchements = get_census_catchment(filtered_accesses, census330, census660, census1000, census)
+                  
+from accessibility_functions import get_accessibility_index                
+acc_index = get_accessibility_index(census_catchements, census, accessibility_dict)
+
+# map the e2sfca index to the census units layer
+census["ugs_accessibility"] = census["KEY_CODE_3"].map(acc_index) 
+
+census['ugs_accessibility'].describe() # awful distribution
+census['ugs_accessibility'].plot(kind='hist',bins=100)
+census[census['ugs_accessibility'] > 2] # most high index have low low population
+# deal with outliers before normalizing.
+
+# TODO review function to get the accessibility: otherwise great job
+# TODO normalize the accessibility values
+# is it correct to normalize just at the end? I don't think I should normalize after the 1st step
+
+

@@ -307,3 +307,23 @@ def get_census_catchment(accesses, census330, census660, census1000, census):
     }
 
     return filtered_census_catchment
+
+def get_accessibility_index(dict_census_to_parks, census_centroids, dict_parks_to_census, weights=None):
+    ratios = get_ugs_to_pop_ratios(dict_parks_to_census, census_centroids)
+    e2sfca = {}
+    if weights is None:
+        weights = {"330m":1, "660m":0.44, "1000m":0.03} # default is Guassian sharp decay
+    for census_unit, grouped_parks in dict_census_to_parks.items():
+        tot_accessibility = 0
+        for zone, parks in grouped_parks.items():
+            if zone in weights: # this checks that the keys align (330m, 660m, etc)
+                weight = weights[zone]
+                sum_accessibility = 0
+                for park in parks:
+                    sum_accessibility += ratios[park]
+            tot_accessibility += sum_accessibility*weight
+        if tot_accessibility > 0:
+            e2sfca[census_unit] = tot_accessibility
+        else:
+            e2sfca[census_unit] = 0
+    return e2sfca
