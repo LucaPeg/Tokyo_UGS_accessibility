@@ -3,6 +3,7 @@ import pandas as pd
 from collections import defaultdict
 import contextily as ctx
 import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
 
 
 def get_accessibility_dict(accesses, parks330, parks660, parks1000, census):
@@ -327,3 +328,42 @@ def get_accessibility_index(dict_census_to_parks, census_centroids, dict_parks_t
         else:
             e2sfca[census_unit] = 0
     return e2sfca
+
+def plot_parks_with_ratio(parks, ugs_ratio_threshold, basemap=True):
+    """
+    Plots park polygons above a ugs_ratio threshold. Color represents 'ugs_ratio' attribute.
+
+    Parameters:
+    - parks (GeoDataFrame): The GeoDataFrame containing park polygons (with 'ugs_ratio' attribute).
+    - ugs_ratio_threshold (float): Minimum value of 'ugs_ratio' to plot a park.
+    - basemap (bool): If True, adds a basemap using contextily.
+    """
+    # Filter parks based on the ugs_ratio threshold
+    filtered_parks = parks[parks['ugs_ratio'] > ugs_ratio_threshold]
+    
+    # Create a colormap (green to red)
+    cmap = LinearSegmentedColormap.from_list('green_red', ['green', 'yellow', 'red'])
+    
+    # Plot
+    fig, ax = plt.subplots(1, 1, figsize=(10, 10))
+    filtered_parks.plot(
+        ax=ax,
+        column='ugs_ratio',  # Color by 'ugs_ratio'
+        cmap=cmap,
+        legend=True,
+        legend_kwds={'label': "UGS Ratio", 'orientation': "vertical"}
+    )
+    
+    # Add basemap if requested
+    if basemap:
+        ctx.add_basemap(
+            ax,
+            crs=filtered_parks.crs.to_string(),
+            source=ctx.providers.Stamen.Terrain  # Use a terrain basemap
+        )
+    
+    # Add labels and title
+    ax.set_title(f"Parks with UGS Ratio > {ugs_ratio_threshold}", fontsize=14)
+    ax.set_axis_off()
+    
+    plt.show()

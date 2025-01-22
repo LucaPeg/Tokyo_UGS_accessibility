@@ -14,6 +14,7 @@ from accessibility_functions import get_census_served
 from accessibility_functions import get_people_served
 from accessibility_functions import get_census_catchment
 from accessibility_functions import get_accessibility_index  
+from accessibility_functions import plot_parks_with_ratio
 
 
 # IMPORT LAYERS
@@ -21,6 +22,7 @@ data = os.path.join("..\\data\\final\\Tokyo_UGS_accessibility.gpkg")
 print(fiona.listlayers(data))
 
 accesses = gpd.read_file(data, layer="park_accesses")
+ugs = gpd.read_file(data, layer='ugs')
 parks330 = gpd.read_file(data, layer="sa_parks330")
 parks660 = gpd.read_file(data, layer="sa_parks660")
 parks1000 = gpd.read_file(data, layer="sa_parks1000")
@@ -146,7 +148,8 @@ else:
     print("Inconsistent park areas found for the following park_ids:")
     print(inconsistent_parks)
 # since area is consistent I can get extract the first area value for each park
-parks = accesses.groupby("park_id").first().reset_index()
+parks = ugs[ugs['park_id'].isin(accesses['park_id'])] # exploit the fact that I filtered the accesses already
+parks.loc[:,'ugs_ratio'] = parks['park_id'].map(ugs_to_pop_ratios) # map the ratios
 parks['area'].plot(kind='hist', bins=100) # there are some issues
 parks['area'].describe()
 parks.sort_values(by='area', ascending=False)
@@ -168,7 +171,7 @@ parks[parks['area']<1000]['area'].plot(kind='hist',bins=100, title='Histogram of
 # ARBITRARY DIVISION:  small (0-1k), Medium 1k-4k, Large: 4k-10k, Very large: above 10k 
 # OR PERFORM LOGARITHMIC PARTITION (the following)
 
-parks['log_area'] = np.log10(parks['area']) # log transform park areas
+parks.loc[:,'log_area'] = np.log10(parks['area']) # log transform park areas
 
 # Define boundaries and labels for coloring
 labels = ["Very Small", "Small", "Medium", "Large", "Very Large"]
@@ -181,7 +184,12 @@ parks["size_cat"] = pd.cut(parks["log_area"], bins=quantiles_parks, labels=label
 print(parks["size_cat"].value_counts()) # check for safety
 parks.groupby("size_cat")['park_id'].count() # first 3 quantiles, then division in very large park
 
-# Histogram log(area) by park size category ##################################################
+# I add the number of people that can access each park
+parks.loc[:,'affluency'] = parks['park_id'].map(people_for_all_parks)
+
+## VISUALIZATION ###########################################################################
+
+## Histogram log(area) by park size category ##
 plt.figure(figsize=(8, 6))  # Start a new figure
 
 # loop through each category and plot it on the same axis (otherwise height mismatch)
@@ -225,10 +233,11 @@ plt.title("Histogram of Park Area by Park Size Category")
 plt.legend(title="Size Category")
 plt.show()
 
-## VISUALIZATION ##
-
 # scatterplot of parks (areas x ugs ratio) divided by size_cat
-parks_no_out = parks[parks['ugs_ratio']<500]
+parks[parks['ugs_ratio']>100]['park_id'].nunique()
+parks[parks['ugs_ratio']>500]['park_id'].unique()
+ratio_limit = 100 # set as you wish for visualization purposes (the following plots)
+parks_no_out = parks[parks['ugs_ratio']<ratio_limit]
 plt.figure(figsize=(8, 6))
 for category, color in size_colors.items():
     subset = parks_no_out[parks_no_out['size_cat'] == category]
@@ -242,8 +251,22 @@ plt.show()
 
 # Idea for visualization: add "number of people served" to parks attribute. 
 # Then do scatterplot
-parks[parks['ugs_ratio']>500]['park_id'].nunique()
-parks[parks['ugs_ratio']>500]['park_id'].unique()
+plt.figure(figsize=(6,8))
+for category, color in size_colors.items():
+    subset = parks_no_out[parks_no_out['size_cat']==category]
+    plt.scatter(subset['affluency'],subset['ugs_ratio'], label=category, color=color, alpha=0.6)
+
+plt.xlabel('Number of people living within 1km of the park accesses')
+plt.ylabel("UGS to population ratio")
+plt.title("Relation between people living near the park and UGS to population ratio")
+plt.legend(title='Size category')
+plt.show()
+
+# Most parks have a very low ugs to population ratio.
+# See where the parks with the highest ratios are
+# Plot over a base map, color by ratio
+
+
 
 ## DIVISION IN PARK CATEGORIES ###############################################################
 # add size category to the accesses gdf
@@ -319,3 +342,6 @@ census[census['full_ugs_accessibility'] > 2] # most high index have low low popu
 
 # TODO SOLVE ACCESSIBILITY ISSUE: why does vl_ugs_accessibility have only 86 census units?
 len(full_accessibility_dict.keys())
+
+
+accesses.loc[:, 'size_cat'] = accesses['park_id'].map(parks.set_index('park_id')['size_cat'])
