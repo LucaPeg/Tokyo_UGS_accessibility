@@ -6,6 +6,7 @@ import fiona
 from collections import defaultdict
 import contextily as ctx
 import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
 
 from accessibility_functions import get_accessibility_dict
 from accessibility_functions import get_ugs_to_pop_ratios
@@ -15,6 +16,7 @@ from accessibility_functions import get_people_served
 from accessibility_functions import get_census_catchment
 from accessibility_functions import get_accessibility_index  
 from accessibility_functions import plot_parks_with_ratio
+
 
 
 # IMPORT LAYERS
@@ -345,3 +347,9 @@ len(full_accessibility_dict.keys())
 
 
 accesses.loc[:, 'size_cat'] = accesses['park_id'].map(parks.set_index('park_id')['size_cat'])
+
+
+
+
+
+plot_parks_with_ratio(parks, 100)
