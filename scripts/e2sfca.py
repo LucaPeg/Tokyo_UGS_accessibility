@@ -15,7 +15,7 @@ from accessibility_functions import get_census_served
 from accessibility_functions import get_people_served
 from accessibility_functions import get_census_catchment
 from accessibility_functions import get_accessibility_index  
-from accessibility_functions import plot_parks_with_ratio
+from accessibility_functions import plot_parks_by_ratio
 
 
 
