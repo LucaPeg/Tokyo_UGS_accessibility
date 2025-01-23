@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 
 
-def get_accessibility_dict(accesses, parks330, parks660, parks1000, census):
+def get_accessibility_dict(accesses, parks_sa330, parks_sa660, parks_sa1000, census_gdf):
     """
     This function needs two arguments:
     accesses = geodf containing park accesses and related parks characteristics
@@ -18,6 +18,7 @@ def get_accessibility_dict(accesses, parks330, parks660, parks1000, census):
     accessibility_dict = {}  # initialize empty dictionary
     assigned_centroids_per_park = defaultdict(set)
     park_areas_from_accesses = accesses.groupby("park_id")["area"].first().to_dict()
+    census_gdf['buffered'] = census_gdf.geometry.buffer(1)
     for park_id in park_areas_from_accesses:
         accessibility_dict[park_id] = {
             "park_area": int(park_areas_from_accesses[park_id]),
@@ -26,9 +27,9 @@ def get_accessibility_dict(accesses, parks330, parks660, parks1000, census):
             "1000m": [],
         }
 
-    joined_330 = gpd.sjoin(parks330, census, how="inner", predicate="intersects")
-    joined_660 = gpd.sjoin(parks660, census, how="inner", predicate="intersects")
-    joined_1000 = gpd.sjoin(parks1000, census, how="inner", predicate="intersects")
+    joined_330 = gpd.sjoin(parks_sa330, census_gdf.set_geometry("buffered"), how="inner", predicate="intersects")
+    joined_660 = gpd.sjoin(parks_sa660, census_gdf.set_geometry("buffered"), how="inner", predicate="intersects")
+    joined_1000 = gpd.sjoin(parks_sa1000, census_gdf.set_geometry("buffered"), how="inner", predicate="intersects")
 
     for park_id, group in joined_330.groupby("park_id"):
         unique_centroids = group["KEY_CODE_3"].unique()
@@ -184,7 +185,8 @@ def plot_census_points_with_basemap(
         color=color,
         markersize=markersize,
         alpha=alpha,
-        label=f"Census units {sign} {threshold} inhabitants",
+        label="Census units",
+        title="Census units {sign} {threshold} inhabitants"
     )
 
     # Add the basemap
@@ -265,10 +267,10 @@ def get_census_catchment(accesses, census330, census660, census1000, census):
             "660m": [],
             "1000m": [],
         }
-
-    joined_330 = gpd.sjoin(census330, accesses, how="inner", predicate="intersects")
-    joined_660 = gpd.sjoin(census660, accesses, how="inner", predicate="intersects")
-    joined_1000 = gpd.sjoin(census1000, accesses, how="inner", predicate="intersects")
+    accesses['buffered'] = accesses.geom.buffer(1)
+    joined_330 = gpd.sjoin(census330, accesses.set_geometry("buffered"), how="inner", predicate="intersects")
+    joined_660 = gpd.sjoin(census660, accesses.set_geometry("buffered"), how="inner", predicate="intersects")
+    joined_1000 = gpd.sjoin(census1000, accesses.set_geometry("buffered"), how="inner", predicate="intersects")
 
     for census_id, group in joined_330.groupby("KEY_CODE_3"):
         unique_parks = group["park_id"].unique()

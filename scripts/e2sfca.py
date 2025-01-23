@@ -7,6 +7,7 @@ from collections import defaultdict
 import contextily as ctx
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
+from shapely.geometry import Point #  to create buffers (check the intersections in get_accessibility_dict)
 
 from accessibility_functions import get_accessibility_dict
 from accessibility_functions import get_ugs_to_pop_ratios
@@ -45,39 +46,36 @@ parks330 = parks330.query("area >= 30")
 parks660 = parks660.query("area >= 30")
 parks1000 = parks1000.query("area >= 30")
 
-# Census catchement areas
-census = gpd.read_file(data, layer="census_centroids")
-census330 = gpd.read_file(data, layer="census330")
-census660 = gpd.read_file(data, layer="census660")
-census1000 = gpd.read_file(data, layer="census1000")
+# Census catchement areas ## CURRENTLY PRODUCING THE NEW ONES
+all_census = gpd.read_file(data, layer='all_census_units') # needed for ugs ratios
+census = gpd.read_file(data, layer='internal_census_units') # relevant census units for 2nd step
+census330 = gpd.read_file(data, layer="int_census330")
+census660 = gpd.read_file(data, layer="int_census660")
+census1000 = gpd.read_file(data, layer="int_census1000")
 
-# fix census datatypes (they are almost all 'objects')
-census_list = [census, census330, census660, census1000]
-string_columns = ["KEY_CODE_3", "name_ja", "name_en"]
-for col in census.columns:
-    if col not in string_columns and col != "geometry":
-        for i in range(len(census_list)):
-            census_list[i][col] = pd.to_numeric(
-                census_list[i][col], errors="coerce", downcast="integer"
-            )
-    
 # exploring census dataframe
-census["pop_tot"].describe()  # 5818 census units, mean 1252 people
-census["pop_tot"].plot(kind="hist", bins=100)
-census.pop_tot.quantile(0.01)  # 1 percentile is 14.17 people per census unit
-census.pop_tot.quantile(0.99)  # 99 percentile is 2830
-census.pop_tot.isna().sum()  # 269 NAs
-plot_census_points_with_basemap(census, "under", threshold=15)
-plot_census_points_with_basemap(census, "over", 3500)
+census["pop_tot"].describe()  # tot5818 | avg1252 people -> 7136 | 1220 after fixing census units
+all_census['pop_tot'].describe() # slightly lower values on average -> makes sense since I am adding the perifery
+all_census['pop_tot'].quantile(0.01) # 14.17 -> 29 
+all_census.pop_tot.quantile(0.01)  # 25 if I consider all census units with Tokyo's 23 wards 
+
+
+# plot difference in the census populaions
+plt.hist(all_census["pop_tot"], bins=100, label='All census units')
+plt.hist(census["pop_tot"], bins=100, alpha=0.7, label='Internal census units')
+plt.xlabel('Population Total')
+plt.ylabel('Frequency')
+plt.legend()
+plt.show()
+
+# where are the 1% census units with the lowest population?
+plot_census_points_with_basemap(all_census, "under", all_census.pop_tot.quantile(0.01))
 # low population values affect the UGS to population ratios
 
-## MAYBE I SHOULD SKIP THIS AND JUST DROP THE PARKS WITH FEW PEOPLE SERVED
-# I trim out the census points below the 1st percentile
-for i in range(len(census_list)):
-    #census_list[i] = census_list[i][census_list[i]["pop_tot"] > 15]  # Drop 1st percentile population
-    census_list[i] = census_list[i].dropna(subset=["pop_tot"])  # Drop NAs
+## I could filter out the census units with low population here
+## However I just drop NAs, I will filter out the parks with low "affluence"
+## affluence = number of people living within 1km of the park's accesses
 
-census, census330, census660, census1000 = census_list
 
 ########################################################################
 # E2SFCA  ##############################################################
@@ -88,10 +86,10 @@ census, census330, census660, census1000 = census_list
 
 # get list of census units for each park
 full_accessibility_dict = get_accessibility_dict(  # defined in accessibility_functions.py
-    accesses, parks330, parks660, parks1000, census
+    accesses, parks330, parks660, parks1000, all_census # all_census to solve issue of boundary parks
 )
-# get for each park its supply over population ratio
-ugs_to_pop_ratios = get_ugs_to_pop_ratios(full_accessibility_dict, census)  # same as above
+# get for each park its supply over population ratio (UGS to population ratio)
+ugs_to_pop_ratios = get_ugs_to_pop_ratios(full_accessibility_dict, all_census)  # same as above
 
 ### DIAGNOSTICS #############################################################
 # check the distribution
@@ -104,54 +102,59 @@ pd.Series(list(ugs_to_pop_ratios.values())).describe()
 top_parks = sorted(ugs_to_pop_ratios.items(), key=lambda x: x[1], reverse=True)
 top_parks = [t[0] for t in top_parks[:20]]
 all_parks = list(ugs_to_pop_ratios.keys())
-for park in top_parks:
-    print(full_accessibility_dict[park])
 
 # does it make sense to remove the census units with few people?
-# this increases the UGS to population ratios of some parks (while zeroes some others)
+# it would increase the UGS to population ratios of some parks (while zeroes some others)
 # Another solution would be to eliminate from the accessibility dict the parks that serve 
 #   less than a threshold of people (let's say 50) ## actually 1 percentile might make more sense
 #   This allows to preserve information about the census units, while tackling the high ugs ratios
 
 census_for_top_parks = get_census_served(top_parks, full_accessibility_dict)
-people_for_top_parks = get_people_served(top_parks, full_accessibility_dict, census) # if I run everything this works
-people_for_all_parks = get_people_served(all_parks, full_accessibility_dict, census)
+people_for_top_parks = get_people_served(top_parks, full_accessibility_dict, all_census) # if I run everything this works
+people_for_all_parks = get_people_served(all_parks, full_accessibility_dict, all_census)
 
 pd.Series(list(people_for_all_parks.values())).describe()
 pd.Series(list(people_for_all_parks.values())).plot(kind='hist',bins=100)
-pd.Series(list(people_for_all_parks.values())).quantile(0.01)
-pd.Series(list(people_for_top_parks.values())).describe()
+pd.Series(list(people_for_all_parks.values())).quantile(0.01) #2866
+pd.Series(list(people_for_top_parks.values())).describe() # all values are now below the 1st percentile value population wise
 
 ppl_1percentile = pd.Series(list(people_for_all_parks.values())).quantile(0.01)
 # final substep: add UGS_to_pop ratio to "accesses" geodataframe
 accesses["ugs_ratio"] = accesses["park_id"].map(ugs_to_pop_ratios)
+
+# check where the parks with highest ratio are
+parks = ugs[ugs['park_id'].isin(accesses['park_id'])] 
+parks = parks.copy()
+parks.loc[:,'ugs_ratio'] = parks['park_id'].map(ugs_to_pop_ratios) # map the ratios
 
 ### FILTERING ###################################################################################
 # now I could drop from the accesses datarframe the parks below a certain people-served threshold
 # also here I should probably subset the parks to get accessibility for different categories
 #################################################################################################
 
-# number of parks that serve less than 713. This is obvious since 713 is the 1st percentile
-len({key : value for key, value in people_for_all_parks.items() if value < 713}) # 78 parks
-
 # I filter the 1st percentile of parks by population served
-relevant_parks = dict(filter(lambda x: x[1] > ppl_1percentile, people_for_all_parks.items()))
+relevant_parks = dict(filter(lambda x: x[1] > ppl_1percentile, people_for_all_parks.items())) # switch 713 with ppl_1percentile
 relevant_parks = list(relevant_parks.keys())
 accesses = accesses[accesses['park_id'].isin(relevant_parks)] # filter out parks without people | from 17831 to 16000
+parks = parks[parks['park_id'].isin(relevant_parks)] # filter out the parks with low affluence 
+
+parks[parks['ugs_ratio']>100]['park_id'].nunique() # after filtering low affluence 92 -> 52 parks with high ratios -> After buffer: 9! Great!
+
+## UGS to population ratio DIAGNOSTICS ########################################################
+# this is after removing the 1% of parks with the lowest "affluence" (i.e., number of people living in their surroundings)
+parks['ugs_ratio'].describe()
+parks['ugs_ratio'].plot(kind='hist', bins=100)
+parks['ugs_ratio'].plot(kind='hist', bins=100, range=(0,1.5))
+
+# VISUALIZE TROUBLESOME PARKS
+plot_parks_by_ratio(parks, 100) # why do I now have the central parks being problematic? Can it be due to the additional census units having low population/being uncorrectly snapped?
+# highest 'important' park is the Imperial East National Gardens, ID: 5037
+full_accessibility_dict[5037]
+get_people_served([5037], full_accessibility_dict, all_census)
+
+
 
 # PRODUCING DIFFERENT PARK CATEGORIES ###########################################################
-
-# make sure park areas are consistent
-area_consistency = accesses.groupby("park_id")["area"].nunique()
-inconsistent_parks = area_consistency[area_consistency > 1]
-if inconsistent_parks.empty:
-    print("The park_area is consistent across all access_ids for each park_id.")
-else:
-    print("Inconsistent park areas found for the following park_ids:")
-    print(inconsistent_parks)
-# since area is consistent I can get extract the first area value for each park
-parks = ugs[ugs['park_id'].isin(accesses['park_id'])] # exploit the fact that I filtered the accesses already
-parks.loc[:,'ugs_ratio'] = parks['park_id'].map(ugs_to_pop_ratios) # map the ratios
 parks['area'].plot(kind='hist', bins=100) # there are some issues
 parks['area'].describe()
 parks.sort_values(by='area', ascending=False)
@@ -173,7 +176,7 @@ parks[parks['area']<1000]['area'].plot(kind='hist',bins=100, title='Histogram of
 # ARBITRARY DIVISION:  small (0-1k), Medium 1k-4k, Large: 4k-10k, Very large: above 10k 
 # OR PERFORM LOGARITHMIC PARTITION (the following)
 
-parks.loc[:,'log_area'] = np.log10(parks['area']) # log transform park areas
+parks.loc[:, 'log_area'] = np.log10(parks['area']) # log transform park areas
 
 # Define boundaries and labels for coloring
 labels = ["Very Small", "Small", "Medium", "Large", "Very Large"]
@@ -187,7 +190,7 @@ print(parks["size_cat"].value_counts()) # check for safety
 parks.groupby("size_cat")['park_id'].count() # first 3 quantiles, then division in very large park
 
 # I add the number of people that can access each park
-parks.loc[:,'affluency'] = parks['park_id'].map(people_for_all_parks)
+parks.loc[:, 'affluency'] = parks['park_id'].map(people_for_all_parks)
 
 ## VISUALIZATION ###########################################################################
 
@@ -237,8 +240,8 @@ plt.show()
 
 # scatterplot of parks (areas x ugs ratio) divided by size_cat
 parks[parks['ugs_ratio']>100]['park_id'].nunique()
-parks[parks['ugs_ratio']>500]['park_id'].unique()
-ratio_limit = 100 # set as you wish for visualization purposes (the following plots)
+parks[parks['ugs_ratio']>100]['park_id'].unique()
+ratio_limit = 100000 # set as you wish for visualization purposes (the following plots)
 parks_no_out = parks[parks['ugs_ratio']<ratio_limit]
 plt.figure(figsize=(8, 6))
 for category, color in size_colors.items():
@@ -251,8 +254,7 @@ plt.title('Scatter Plot by size category')
 plt.legend(title='Size category')
 plt.show()
 
-# Idea for visualization: add "number of people served" to parks attribute. 
-# Then do scatterplot
+# plot relationship between 'affluence' and ugs to population ratio 
 plt.figure(figsize=(6,8))
 for category, color in size_colors.items():
     subset = parks_no_out[parks_no_out['size_cat']==category]
@@ -264,11 +266,16 @@ plt.title("Relation between people living near the park and UGS to population ra
 plt.legend(title='Size category')
 plt.show()
 
-# Most parks have a very low ugs to population ratio.
-# See where the parks with the highest ratios are
-# Plot over a base map, color by ratio
+# Most parks have a very low ugs to population ratio: see where they are:
+plot_parks_by_ratio(parks, 100)
+plot_parks_by_ratio(parks, 500) # now zero
+plot_parks_by_ratio(parks,5000) # now zero
 
-
+# Two categories of "problematic" parks: 
+# 1. large parks in non residential areas 
+# 2. parks at the edges of Tokyo (because I do not consider the boundary census units)
+# When I add boundary census units, the parks at the boundaries have a lower ugs to population ratio.
+# However, why would parks in central tokyo's increase? I just added more census units it should monotonically decrease
 
 ## DIVISION IN PARK CATEGORIES ###############################################################
 # add size category to the accesses gdf
@@ -289,6 +296,7 @@ all_accesses = accesses.copy()
 ############################################################################################
 ## STEP 2: for each census unit, sum the ratios of the parks it can access #################
 ############################################################################################
+# TODO FIX THE FOLLOWING CODE
 vl_census_catchements = get_census_catchment(vl_accesses, census330, census660, census1000, census)             
 vl_acc_index = get_accessibility_index(vl_census_catchements, census, full_accessibility_dict)
 
@@ -347,9 +355,3 @@ len(full_accessibility_dict.keys())
 
 
 accesses.loc[:, 'size_cat'] = accesses['park_id'].map(parks.set_index('park_id')['size_cat'])
-
-
-
-
-
-plot_parks_with_ratio(parks, 100)
