@@ -132,12 +132,12 @@ def plot_census_points_with_basemap(
     sign,
     threshold,
     buffer_factor=1.5,
-    title="Filtered Census Points",
     color="red",
     markersize=10,
     alpha=0.7,
     zoom=10,
     basemap_source=ctx.providers.CartoDB.Positron,
+    title=None
 ):
     """
     Plot census points on a basemap with adjustable parameters.
@@ -154,6 +154,8 @@ def plot_census_points_with_basemap(
         basemap_source: Contextily basemap source.
         zoom (int): Optional zoom level for the basemap.
     """
+    if title is None:
+        title = f"Census units {sign} {str(int(threshold))} inhabitants"
     if sign not in ["over", "under"]:
         raise ValueError("The sing must be either 'over' or 'under'")
     census = census_gdf.to_crs(epsg=3857)  # for baseline compatibility
@@ -185,8 +187,6 @@ def plot_census_points_with_basemap(
         color=color,
         markersize=markersize,
         alpha=alpha,
-        label="Census units",
-        title="Census units {sign} {threshold} inhabitants"
     )
 
     # Add the basemap
@@ -198,7 +198,6 @@ def plot_census_points_with_basemap(
 
     # Customize the plot
     ax.set_title(title, fontsize=16)
-    ax.legend(loc="upper left")
     ax.axis("off")  # Turn off axis labels
 
     # Show the plot
@@ -267,7 +266,7 @@ def get_census_catchment(accesses, census330, census660, census1000, census):
             "660m": [],
             "1000m": [],
         }
-    accesses['buffered'] = accesses.geom.buffer(1)
+    accesses['buffered'] = accesses.geometry.buffer(1)
     joined_330 = gpd.sjoin(census330, accesses.set_geometry("buffered"), how="inner", predicate="intersects")
     joined_660 = gpd.sjoin(census660, accesses.set_geometry("buffered"), how="inner", predicate="intersects")
     joined_1000 = gpd.sjoin(census1000, accesses.set_geometry("buffered"), how="inner", predicate="intersects")
@@ -331,13 +330,14 @@ def get_accessibility_index(dict_census_to_parks, census_centroids, dict_parks_t
             e2sfca[census_unit] = 0
     return e2sfca
 
-def plot_parks_by_ratio(parks, ugs_ratio_threshold, basemap=True):
+def plot_parks_by_ratio(parks, ugs_ratio_threshold, perimeter=None, basemap=True):
     """
     Plots park polygons above a ugs_ratio threshold. Color represents 'ugs_ratio' attribute.
 
     Parameters:
     - parks (GeoDataFrame): The GeoDataFrame containing park polygons (with 'ugs_ratio' attribute).
     - ugs_ratio_threshold (float): Minimum value of 'ugs_ratio' to plot a park.
+    - perimeter_gdf (GeoDataFrame): Optional, overlays a boundary (like the study area one)
     - basemap (bool): If True, adds a basemap (Carto).
     """
     # filter parks
@@ -355,7 +355,11 @@ def plot_parks_by_ratio(parks, ugs_ratio_threshold, basemap=True):
         legend=True,
         legend_kwds={'label': "UGS Ratio", 'orientation': "vertical"}
     )
+    # Perimeter (optional)
+    if perimeter is not None:
+        perimeter.geometry.plot(ax=ax, color='black', linewidth=0.5, label='Study Area Boundary')
     
+    # Basemap is by default
     if basemap:
         ctx.add_basemap(
             ax,
@@ -365,5 +369,51 @@ def plot_parks_by_ratio(parks, ugs_ratio_threshold, basemap=True):
     
     ax.set_title(f"Parks with UGS Ratio > {ugs_ratio_threshold}", fontsize=14)
     ax.set_axis_off()
+    
+    plt.show()
+    
+def plot_parks_ratio_people(parks, ugs_ratio_threshold, perimeter_gdf=None, basemap=True):
+    """
+    Plots park polygons above a ugs_ratio threshold and overlays the study area perimeter.
+
+    Parameters:
+    - parks (GeoDataFrame): The GeoDataFrame containing park polygons (with 'ugs_ratio' and "affluency").
+    - ugs_ratio_threshold (float): Minimum value of 'ugs_ratio' to plot a park.
+    - perimeter_gdf (GeoDataFrame): Optional GeoDataFrame of the study area perimeter.
+    - perimeter_gdf (GeoDataFrame): Optional, overlays a boundary (like the study area one)
+    - basemap (bool): If True, adds a basemap (Carto).
+    """
+    # Filter parks
+    filtered_parks = parks[parks['ugs_ratio'] > ugs_ratio_threshold]
+    
+    # Colormap (green to red)
+    cmap = LinearSegmentedColormap.from_list('red_green', ['red', 'yellow', 'green'])
+    
+    # Plot
+    fig, ax = plt.subplots(1, 1, figsize=(10, 10))
+    filtered_parks.plot(
+        ax=ax,
+        column='affluency',  # color by 'affluency'
+        cmap=cmap,
+        legend=True,
+        legend_kwds={'label': "People living within 1km of the park", 'orientation': "vertical"}
+    )
+    
+    # Perimeter (optional)
+    if perimeter_gdf is not None:
+        perimeter_gdf.geometry.plot(ax=ax, color='black', linewidth=0.5, label='Study Area Boundary')
+
+    
+    # Basemap (default)
+    if basemap:
+        ctx.add_basemap(
+            ax,
+            crs=filtered_parks.crs.to_string(),
+            source=ctx.providers.CartoDB.Positron
+        )
+    
+    ax.set_title(f"Parks with UGS Ratio > {ugs_ratio_threshold}", fontsize=14)
+    ax.set_axis_off()
+    ax.legend()
     
     plt.show()
