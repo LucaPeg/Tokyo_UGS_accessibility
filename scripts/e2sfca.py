@@ -200,6 +200,8 @@ all_accesses = accesses.copy()
 ############################################################################################
 ## VISUALIZATION ###########################################################################
 ############################################################################################
+# TODO fix names issue to have visualizations of amount of greenspace for each ward.
+
 ## Histogram log(area) by park size category ##
 plt.figure(figsize=(8, 6))  # Start a new figure
 
@@ -275,7 +277,7 @@ plt.show()
 
 # VISUALIZE TROUBLESOME PARKS #TODO solve the high ugs to pop ratio issue
 plot_parks_by_ratio(parks, 1.5, study_area_boundary) 
-plot_parks_by_ratio(parks, 10, study_area_boundary) 
+plot_parks_by_ratio(parks, 10, study_area_boundary)
 plot_parks_by_ratio(parks, 100, study_area_boundary) 
 
 plot_parks_ratio_people(parks, 1.5, study_area_boundary)
@@ -287,10 +289,13 @@ plot_parks_ratio_people(parks, 100, study_area_boundary)
 # 2. Riversides -> large and few people in the surrounding. Adding other variables to park supply would lower their ratios (facilities, length of trails inside parks)
 # 3. Parks at the edges of Tokyo (because I do not consider the census unit outside the study area in the UGS_ratio computation)
      
+# TODO Deal with outliers before moving to the second step
+# outliers are mainly Koto area and riversides
+     
 ############################################################################################
 ## STEP 2: for each census unit, sum the ratios of the parks it can access #################
 ############################################################################################
-# TODO FIX THE FOLLOWING CODE
+
 vl_census_catchements = get_census_catchment(vl_accesses, census330, census660, census1000, census)  # census are the internal units           
 vl_acc_index = get_accessibility_index(vl_census_catchements, census, full_accessibility_dict)
 
@@ -306,7 +311,6 @@ sm_acc_index = get_accessibility_index(sm_census_catchements, census, full_acces
 all_census_catchements = get_census_catchment(all_accesses, census330, census660, census1000, census)             
 all_acc_index = get_accessibility_index(all_census_catchements, census, full_accessibility_dict)
 
-len(vl_census_catchements.keys())
 
 # map the e2sfca index to the census units layer
 census["full_ugs_accessibility"] = census["KEY_CODE_3"].map(all_acc_index)
@@ -316,37 +320,36 @@ census["md_ugs_accessibility"] = census["KEY_CODE_3"].map(md_acc_index)
 census["sm_ugs_accessibility"] = census["KEY_CODE_3"].map(sm_acc_index)
 
 # evaluate results  
-census['vl_ugs_accessibility'].describe() # just 86 observations
+census['vl_ugs_accessibility'].describe()
 census['vl_ugs_accessibility'].plot(kind='hist',bins=100)
-# something must be wrong:
-list_large_parks = list((vl_accesses['park_id'].unique()))
-large_parks_census = get_census_served(list_large_parks, full_accessibility_dict)
-unique_units_covered = set()
+census[census['vl_ugs_accessibility']>40]['KEY_CODE_3'].nunique() # 90 units with unusually high values
+census['vl_ugs_accessibility'].plot(kind='hist',bins=100, range=(0,40))
 
-for census_units in large_parks_census.values():
-    unique_units_covered.update(census_units)
-len(unique_units_covered)  # more than 4000. What's up with the 86?
-
-
-census['lg_ugs_accessibility'].describe() # awful distribution
+census['lg_ugs_accessibility'].describe() 
 census['lg_ugs_accessibility'].plot(kind='hist',bins=100)
 
-census['md_ugs_accessibility'].describe() # awful distribution
+census['md_ugs_accessibility'].describe() 
 census['md_ugs_accessibility'].plot(kind='hist',bins=100)
 
-census['sm_ugs_accessibility'].describe() # awful distribution
+census['sm_ugs_accessibility'].describe() 
 census['sm_ugs_accessibility'].plot(kind='hist',bins=100)
 
-census['full_ugs_accessibility'].describe() # awful distribution
+census['full_ugs_accessibility'].describe()
 census['full_ugs_accessibility'].plot(kind='hist',bins=100)
-census[census['full_ugs_accessibility'] > 2] # most high index have low low population # deal with outliers before normalizing.
-
-# TODO normalize the accessibility values
-# TODO fix names issue to have visualizations of amount of greenspace for each ward.
-# TODO make sure that the name issue is not a symptom of other attributes issues
-
-# TODO SOLVE ACCESSIBILITY ISSUE: why does vl_ugs_accessibility have only 86 census units?
-len(full_accessibility_dict.keys())
 
 
-accesses.loc[:, 'size_cat'] = accesses['park_id'].map(parks.set_index('park_id')['size_cat'])
+# normalize the values: min max 
+acc_score_list = ['full_ugs_accessibility',
+                  'vl_ugs_accessibility',
+                  'lg_ugs_accessibility',
+                  'md_ugs_accessibility',
+                  'sm_ugs_accessibility'
+                  ]
+for acc_score in acc_score_list:
+    min_val = census[acc_score].min()
+    max_val = census[acc_score].max()
+    census[acc_score] = (census[acc_score] - min_val) / max_val
+
+
+# TODO Merge the actual polygonal geometry for visualization purposes
+# TODO Perform GWR
