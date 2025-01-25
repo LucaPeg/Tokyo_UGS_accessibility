@@ -208,10 +208,10 @@ plt.figure(figsize=(8, 6))  # Start a new figure
 # loop through each category and plot it on the same axis (otherwise height mismatch)
 for category, color in size_colors.items():
     # Filter data for each category
-    data = parks[parks['size_cat'] == category]['log_area']
+    data_plot = parks[parks['size_cat'] == category]['log_area']
     
     plt.hist( # plot filtered data
-        data, 
+        data_plot, 
         bins=100, 
         color=color, 
         alpha=0.7,  # Transparency for better overlap visibility
@@ -229,10 +229,10 @@ plt.show()  # Display the plot
 plt.figure(figsize=(8, 6))  # Start a new figure
 
 for category, color in size_colors.items():
-    data = parks[parks['size_cat'] == category]['area']
+    data_plot = parks[parks['size_cat'] == category]['area']
     
     plt.hist(
-        data, 
+        data_plot, 
         bins=100,  
         color=color, 
         alpha=0.7,  
@@ -350,6 +350,31 @@ for acc_score in acc_score_list:
     max_val = census[acc_score].max()
     census[acc_score] = (census[acc_score] - min_val) / max_val
 
+# Associate polygon geometry for visualization purposes
+census_polygons = gpd.read_file(data, layer='census_polygons')
 
-# TODO Merge the actual polygonal geometry for visualization purposes
-# TODO Perform GWR
+census_polygons = census_polygons.merge(census, on="KEY_CODE_3", how="inner")
+
+with pd.option_context('display.max_columns', None): #temporarily show all cols
+    print(census_polygons.head())
+    
+unchanged_cols = ["KEY_CODE_3", # cols not present in polygonal data
+                  'full_ugs_accessibility',
+                  'vl_ugs_accessibility',
+                  'lg_ugs_accessibility',
+                  'md_ugs_accessibility',
+                  'sm_ugs_accessibility']
+renamed_cols = [
+    col_name if col_name in unchanged_cols else f"{col_name}_x"
+    for col_name in census.columns
+]
+
+census_polygons = census_polygons[renamed_cols]
+
+census_polygons.columns = [
+    col[:-2] if col.endswith('_x') else col
+    for col in census_polygons.columns
+]
+
+# data export ## after removing outliers I need to re-export
+# census_polygons.to_file(data, layer='census_for_regression') ## maybe change gpkg destination
