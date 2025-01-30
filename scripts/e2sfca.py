@@ -376,5 +376,10 @@ census_polygons.columns = [
     for col in census_polygons.columns
 ]
 
+for acc_value in acc_score_list:
+    census_polygons[acc_value] =census_polygons[acc_value].fillna(0)
+
+
 # data export ## after removing outliers I need to re-export
-# census_polygons.to_file(data, layer='census_for_regression') ## maybe change gpkg destination
+# regression_data_path = os.path.join('..\\data\\final\\analysis_data.gpkg')
+# census_polygons.to_file(regression_data_path, layer='census_for_regression') 
