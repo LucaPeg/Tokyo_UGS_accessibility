@@ -1,13 +1,11 @@
-import requests
+import gdown
+import os
 
-zenodo_url = "https://zenodo.org/record/YOUR_RECORD_ID/files/dataset.zip?download=1"
+output_dir = os.path.join('..')
+os.makedirs(output_dir, exist_ok=True)
 
-output_file = "tokyo_ugs_accessibility.zip"
+# The folder URL from Google Drive
+folder_url = 'https://drive.google.com/drive/folders/1IX-OQY1NuDNeU4vJ-hwdcs1klzi_1aff'
 
-# Download the file
-response = requests.get(zenodo_url, stream=True)
-with open(output_file, "wb") as file:
-    for chunk in response.iter_content(chunk_size=1024):
-        file.write(chunk)
-
-print("Download complete.")
+# Download the folder; gdown will download all files into the specified directory.
+gdown.download_folder(url=folder_url, output=output_dir, quiet=False, use_cookies=False)

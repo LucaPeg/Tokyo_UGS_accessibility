@@ -183,20 +183,19 @@ features = rdata.drop(columns=[ #'KEY_CODE_3', 'name_ja', 'name_en', 'geometry',
                                 'full_ugs_accessibility', 'vl_ugs_accessibility',
                                 'lg_ugs_accessibility','md_ugs_accessibility','sm_ugs_accessibility'])
 
-# Step 1: Standardize the data
+# data standardization (PCA is influenced by measurement unit)
 scaler = StandardScaler()
 rdata_standardized = scaler.fit_transform(features)
 
-# Step 2: Compute PCA
+# actual PCA computation
 pca = PCA()
 pca.fit(rdata_standardized)
 
-# Step 3: Analyze explained variance
+# check explained variance
 explained_variance_ratio = pca.explained_variance_ratio_
 cumulative_explained_variance = explained_variance_ratio.cumsum()
 
-# Scree plot
-plt.figure(figsize=(10, 6))
+plt.figure(figsize=(10, 6)) # scree plot
 plt.bar(range(1, len(explained_variance_ratio) + 1), explained_variance_ratio, alpha=0.5, align='center', label='Individual explained variance')
 plt.step(range(1, len(cumulative_explained_variance) + 1), cumulative_explained_variance, where='mid', label='Cumulative explained variance')
 plt.ylabel('Explained variance ratio')
@@ -205,16 +204,21 @@ plt.legend(loc='best')
 plt.title('Scree Plot')
 plt.show()
 
-# Step 4: Select the number of components
-n_components = (cumulative_explained_variance <= 0.95).sum()
+# select number of components according to the scree plot
+n_components = #(cumulative_explained_variance <= 0.75).sum()
 pca = PCA(n_components=n_components)
 rdata_pca = pca.fit_transform(rdata_standardized)
 
-# Convert to DataFrame
+# create a df
 rdata_pca_df = pd.DataFrame(rdata_pca, columns=[f"PC{i+1}" for i in range(n_components)])
 print(rdata_pca_df.head())
 
-# Step 5: Interpret the principal components
-# Use the columns of the `features` DataFrame, not `rdata`
+# look at loadings to interpret the components
 loadings = pd.DataFrame(pca.components_, columns=features.columns, index=[f"PC{i+1}" for i in range(n_components)])
 print(loadings)
+
+# TODO PCA with all features found in Census.
+
+# TODO Gini index of accessibility
+# TODO Lorenz curve of accessibility
+# TODO GWR: fix issue with library  
