@@ -2,3 +2,4 @@
 data/
 pictures/
 scripts/__pycache__
+scripts/mobile_data.py 

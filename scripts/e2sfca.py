@@ -20,7 +20,7 @@ from accessibility_functions import plot_parks_by_ratio
 from accessibility_functions import plot_parks_ratio_people 
 
 # IMPORT LAYERS
-data = os.path.join("..\\data\\final\\Tokyo_UGS_accessibility.gpkg")
+data = os.path.join("..\\data\\final\\ugs_e2sfca.gpkg")
 print(fiona.listlayers(data))
 
 study_area_boundary = gpd.read_file(data, layer='tokyo_boundary') # necessary only for plots
