@@ -1,9 +1,11 @@
-# Tokyo_UGS_accessibility
+# Tokyo UGS Accessibility
 This repository contains the code used for my Master's thesis. <br>
+
+## Repo structure
 The repository is organized as follows: 
 - `notebooks` folder, which contains jupyter notebooks where some processes are explained in detail. Specifically, there are two notebooks:
     - `park_layer`, which lays out the process to obtain the urban green spaces layer
-    - `e2sfca`, which delines how the accessibility index was calculated
+    - `e2sfca`, which explains how the accessibility index was calculated
 - `scripts` folder, which contains `.py` files to carry out specific operations.
     - `accessibility_functions.py`: contains many functions necessary in the computation of the accessibility index
     - `analysis.py`: after the e2sfca index is obtained, it performs statistical analyses on the final data
