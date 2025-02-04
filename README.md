@@ -16,7 +16,7 @@ The repository is organized as follows:
 
 ## How to use the repository
 1. Install the relevant dependencies by using the `environment.yml` file.
-2. Download the data by running `download_data.py`, found in `scripts`.
-3. Check the process of interest:
+2. Download the data at [the following link](https://drive.google.com/file/d/1mYUsnk-HIr2ES5S4Dfy1gjC_G_3Ex-h6/view?usp=sharing)
+3. Replicate the processes
    - To evaluate the accessibility estimation, the `e2sfca.ipynb` can be checked. The code on the notebook can be interacted with, especially when it comes to visualizations.
    - To focus on the final analysis, the `analysis.py` file should be considered.  
