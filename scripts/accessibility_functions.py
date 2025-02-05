@@ -2,6 +2,7 @@ import geopandas as gpd
 import pandas as pd
 from collections import defaultdict
 import contextily as ctx
+import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 
@@ -328,6 +329,28 @@ def get_accessibility_index(dict_census_to_parks, census_centroids, dict_parks_t
             e2sfca[census_unit] = tot_accessibility
         else:
             e2sfca[census_unit] = 0
+    return e2sfca
+
+def get_accessibility_index_log(dict_census_to_parks, census_centroids, dict_parks_to_census, weights=None):
+    ratios = get_ugs_to_pop_ratios(dict_parks_to_census, census_centroids)
+
+    for k in ratios:  # take log
+        ratios[k] = np.log1p(ratios[k])
+
+    e2sfca = {}
+    
+    if weights is None:
+        weights = {"330m": 1, "660m": 0.44, "1000m": 0.03}  # Default is Gaussian sharp decay
+    
+    for census_unit, grouped_parks in dict_census_to_parks.items():
+        tot_accessibility = 0  # reset for each census unit
+        
+        for zone, parks in grouped_parks.items():
+            if zone in weights:  
+                weight = weights[zone]
+                sum_accessibility = sum(ratios.get(park, 0) for park in parks)
+                tot_accessibility += sum_accessibility * weight
+            
     return e2sfca
 
 def plot_parks_by_ratio(parks, ugs_ratio_threshold, perimeter=None, basemap=True):

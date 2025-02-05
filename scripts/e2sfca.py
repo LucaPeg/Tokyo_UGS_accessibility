@@ -9,16 +9,18 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 from shapely.geometry import Point #  to create buffers (check the intersections in get_accessibility_dict)
 
-from accessibility_functions import get_accessibility_dict
-from accessibility_functions import get_ugs_to_pop_ratios
-from accessibility_functions import plot_census_points_with_basemap
-from accessibility_functions import get_census_served
-from accessibility_functions import get_people_served
-from accessibility_functions import get_census_catchment
-from accessibility_functions import get_accessibility_index  
-from accessibility_functions import plot_parks_by_ratio
-from accessibility_functions import plot_parks_ratio_people 
-
+from accessibility_functions import (
+    get_accessibility_dict,
+    get_ugs_to_pop_ratios,
+    plot_census_points_with_basemap,
+    get_census_served,
+    get_people_served,
+    get_census_catchment,
+    get_accessibility_index, 
+    plot_parks_by_ratio,
+    plot_parks_ratio_people, 
+    get_accessibility_index_log,
+)
 # IMPORT LAYERS
 data = os.path.join("..\\data\\final\\ugs_e2sfca.gpkg")
 print(fiona.listlayers(data))
@@ -383,3 +385,13 @@ for acc_value in acc_score_list:
 # data export ## after removing outliers I need to re-export
 # regression_data_path = os.path.join('..\\data\\final\\analysis_data.gpkg')
 # census_polygons.to_file(regression_data_path, layer='census_for_regression') 
+
+
+# DEALING WITH PARKS OUTLIERS (high UGS_to_population ratios)
+# Three solutions: 
+#   get rid of 99 percentile of parks by ugs_to_pop_ratio
+#   transform ugs_ratio in a log variable
+#   fix a ceiling for ugs_ratio
+
+# Get rid of 99 percentile 
+parks[parks['ugs_ratio'] > parks['ugs_ratio'].quantile(0.99)] # extract parks in the 99 percentile
