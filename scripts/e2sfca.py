@@ -387,11 +387,3 @@ for acc_value in acc_score_list:
 # census_polygons.to_file(regression_data_path, layer='census_for_regression') 
 
 
-# DEALING WITH PARKS OUTLIERS (high UGS_to_population ratios)
-# Three solutions: 
-#   get rid of 99 percentile of parks by ugs_to_pop_ratio
-#   transform ugs_ratio in a log variable
-#   fix a ceiling for ugs_ratio
-
-# Get rid of 99 percentile 
-parks[parks['ugs_ratio'] > parks['ugs_ratio'].quantile(0.99)] # extract parks in the 99 percentile

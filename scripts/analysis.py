@@ -17,7 +17,7 @@ from accessibility_functions import (plot_census_points_with_basemap,
 
 
 # import data
-data = os.path.join("..\\data\\final\\analysis_data.gpkg")
+data = os.path.join("..\\data\\final\\ugs_analysis_data.gpkg")
 tokyo_wards = gpd.read_file(data, layer='wards')
 census = gpd.read_file(data, layer='census_for_regression')
 
@@ -42,6 +42,10 @@ census = gpd.read_file(data, layer='census_for_regression')
 
 
 # SELECTING / CREATING VARIABLES FOR REGRESSION ANALYSIS
+lower_wage = ['cleaning_workers', 'construction_workers', 'transport_machinery_workers',
+    'production_process_workers', 'agri_workers', 'service_workers' ]
+high_wage = ['managers','professional_workers']
+
 census['prop_young_pop'] = census['pop_under14']/census['pop_tot']
 census['prop_o65_pop'] = census['pop_over65']/census['pop_tot']
 census['prop_o75_pop'] = census['pop_over75']/census['pop_tot']
@@ -49,20 +53,20 @@ census['prop_foreign_pop'] = census['pop_foreign']/census['pop_tot']
 census['prop_hh_o65'] = census['househ_w_over65yo'] / census['n_households']
 census['hh_only_elderly'] = census['singleelderly_househ'] + census['couplelederly_househ']
 census['prop_hh_only_elderly'] = census['hh_only_elderly'] / census['n_households']
+census['prop_low_wage'] = census[lower_wage].sum(axis=1)/census['total_workers']
+census['prop_high_wage'] = census[high_wage].sum(axis=1)/census['total_workers']
 census['prop_managers'] = census['managers'] / census['total_workers']
-census['n_managers_professionals'] = census['managers'] + census['professional_workers']
-census['prop_high_earning'] = census['n_managers_professionals'] / census['total_workers']
 census['prop_uni_graduates'] = census['grad_university']/census['tot_graduates'] 
-census['prop_15_65'] =
-census['prop_1hh'] = 
-census['prop_2hh'] = 
-census['prop_3hh'] = 
-census['prop_4hh'] =
-census['prop_5hh'] = 
-census['prop_6hh'] =
-census['prop_7hh'] =
-census['prop_low_wage'] 
-
+census['prop_15_64'] = census['pop_15_64']/census['pop_tot']
+census['prop_1hh'] = census['1p_househ']/census['n_households']
+census['prop_2hh'] = census['2p_househ']/census['n_households']
+census['prop_3hh'] = census['3p_househ']/census['n_households']
+census['prop_4hh'] = census['4p_househ']/census['n_households']
+census['prop_5hh'] = census['5p_househ']/census['n_households']
+census['prop_6hh'] = census['6p_househ']/census['n_households']
+census['prop_7hh'] = census['7p_househ']/census['n_households']
+census['prop_hh_u6'] = census['househ_w_under6yo']/census['n_households']
+census['prop_hh_head20'] = census['headhouseh_in20s']/census['n_households']
 
 # EXPLORATORY DATA ANALYSIS
 # check issue in population distributions: based on results fixe the e2sfca.py
@@ -79,10 +83,12 @@ sns.boxplot(census['prop_hh_only_elderly'])
 sns.boxplot(census['prop_managers']) # this is 1
 sns.boxplot(census['prop_high_earning']) #  1
 sns.boxplot(census['prop_uni_graduates']) #  1
+sns.boxplot(census['prop_15_64']) 
+sns.boxplot(census['prop_1hh']) 
+sns.boxplot(census['prop_hh_head20']) 
 
 
 pd.set_option('display.max_columns', None)
-problematic_census = []
 census[census['prop_o65_pop'] > 0.8][['KEY_CODE_3','pop_tot','pop_over65']]
 census[census['prop_o75_pop'] > 0.7][['KEY_CODE_3','pop_tot','pop_over75']]
 census[census['prop_foreign_pop'] > 0.8][['KEY_CODE_3','pop_tot','pop_foreign']]
@@ -91,19 +97,26 @@ census[census['prop_managers'] > 0.8][['KEY_CODE_3','total_workers','pop_tot','m
 census[census['prop_high_earning'] > 0.8][['KEY_CODE_3','total_workers','professional_workers', 'prop_high_earning']]
 census[census['prop_uni_graduates'] > 0.8]["KEY_CODE_3"]
 
+census[census['prop_15_64'] > 0.9]["KEY_CODE_3"].count()
+census[census['prop_1hh'] > 0.9]["KEY_CODE_3"].count()
+census[census['prop_hh_head20'] > 0.8]["KEY_CODE_3"].count()
+
+# TODO add to problematic census prop_15_64, prop_1hh prop_hh_head20 
 problematic_census = set()
 problematic_census.update(census[census['prop_o65_pop'] > 0.8]["KEY_CODE_3"])
 problematic_census.update(census[census['prop_o75_pop'] > 0.7]["KEY_CODE_3"])
 problematic_census.update(census[census['prop_foreign_pop'] > 0.8]["KEY_CODE_3"])
 problematic_census.update(census[census['prop_managers'] > 0.8]["KEY_CODE_3"])
 problematic_census.update(census[census['prop_hh_only_elderly'] > 0.8]["KEY_CODE_3"])
-problematic_census.update(census[census['prop_high_earning'] > 0.8]["KEY_CODE_3"])
+problematic_census.update(census[census['prop_high_wage'] > 0.8]["KEY_CODE_3"])
 problematic_census.update(census[census['prop_uni_graduates'] > 0.8]["KEY_CODE_3"])
+problematic_census.update(census[census['prop_15_64'] > 0.95]["KEY_CODE_3"])
+problematic_census.update(census[census['prop_1hh'] > 0.95]["KEY_CODE_3"])
+problematic_census.update(census[census['prop_hh_head20'] > 0.8]["KEY_CODE_3"])
 
 census = census[~census['KEY_CODE_3'].isin(problematic_census)]
 
-census[census['price_mean']>10000000]
-
+census.describe()
 # census with high population
 plot_census_points_with_basemap(census, 'over', 4000) # do these locations make sense?
 census[census['pop_tot']>4000]
@@ -113,11 +126,11 @@ X = ['pop_tot', '', '','prop_young_pop', 'prop_o65_pop', 'prop_o75_pop', 'prop_f
        'prop_hh_only_elderly', 'prop_managers',
        'prop_high_earning', 'prop_uni_graduates', 'price_mean',
        ]
+
 relevant_attributes = ['prop_young_pop', 'prop_o65_pop', 'prop_o75_pop', 'prop_foreign_pop',
-       'prop_hh_only_elderly', 'prop_managers',
-       'prop_high_earning', 'prop_uni_graduates', 'price_mean',
-       'full_ugs_accessibility', 'vl_ugs_accessibility',
-       'lg_ugs_accessibility', 'md_ugs_accessibility', 'sm_ugs_accessibility']
+       'prop_hh_only_elderly', 'prop_managers', 'vl_ugs_accessibility',
+       'prop_high_wage', 'prop_low_wage', 'prop_uni_graduates', 'price_mean', 'prop_15_64', 'prop_1hh', 'prop_hh_head20'
+        ]
 
 rdata = census[relevant_attributes]
 
@@ -176,12 +189,14 @@ print(vif_data) # obviously
 
 
 
+
 ## PCA ################################################################## 
 
 # remove non numeric column and target variables
-features = rdata.drop(columns=[ #'KEY_CODE_3', 'name_ja', 'name_en', 'geometry', 
-                                'full_ugs_accessibility', 'vl_ugs_accessibility',
-                                'lg_ugs_accessibility','md_ugs_accessibility','sm_ugs_accessibility'])
+features = rdata.drop(columns=[ #'KEY_CODE_3', 'name_ja', 'name_en', 'geometry', 'full_ugs_accessibility', 'lg_ugs_accessibility','md_ugs_accessibility','sm_ugs_accessibility'
+                                 'vl_ugs_accessibility'
+                                ])
+
 
 # data standardization (PCA is influenced by measurement unit)
 scaler = StandardScaler()
@@ -205,7 +220,7 @@ plt.title('Scree Plot')
 plt.show()
 
 # select number of components according to the scree plot
-n_components = #(cumulative_explained_variance <= 0.75).sum()
+n_components = 3#(cumulative_explained_variance <= 0.75).sum()
 pca = PCA(n_components=n_components)
 rdata_pca = pca.fit_transform(rdata_standardized)
 
@@ -217,8 +232,21 @@ print(rdata_pca_df.head())
 loadings = pd.DataFrame(pca.components_, columns=features.columns, index=[f"PC{i+1}" for i in range(n_components)])
 print(loadings)
 
-# TODO PCA with all features found in Census.
+
+# inspect correlation between components and accessibility
+
+rdata_pca_df["vl_ugs_accessibility"] = rdata["vl_ugs_accessibility"].values
+correlation_matrix = rdata_pca_df.corr()
+
+plt.figure(figsize=(8, 6))
+sns.heatmap(correlation_matrix, annot=True, cmap="coolwarm", fmt=".2f", linewidths=0.5)
+plt.title("Correlation between PCA Components and vl_ugs_accessibility")
+plt.show()
+
+
+# TODO associate ward names to parks using wards layer. Use it for visualizations
 
 # TODO Gini index of accessibility
 # TODO Lorenz curve of accessibility
 # TODO GWR: fix issue with library  
+

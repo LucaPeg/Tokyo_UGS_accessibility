@@ -350,6 +350,10 @@ def get_accessibility_index_log(dict_census_to_parks, census_centroids, dict_par
                 weight = weights[zone]
                 sum_accessibility = sum(ratios.get(park, 0) for park in parks)
                 tot_accessibility += sum_accessibility * weight
+        if tot_accessibility > 0:
+            e2sfca[census_unit] = tot_accessibility
+        else:
+            e2sfca[census_unit] = 0
             
     return e2sfca
 
