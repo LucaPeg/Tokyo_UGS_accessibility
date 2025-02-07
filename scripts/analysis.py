@@ -19,7 +19,7 @@ from accessibility_functions import (plot_census_points_with_basemap,
 # import data
 data = os.path.join("..\\data\\final\\ugs_analysis_data.gpkg")
 tokyo_wards = gpd.read_file(data, layer='wards')
-census = gpd.read_file(data, layer='census_for_regression')
+census = gpd.read_file(data, layer='census_for_analysis')
 
 # ADDING EDUCATIONAL ATTAINEMENT DATA
 
@@ -36,12 +36,11 @@ census = gpd.read_file(data, layer='census_for_regression')
 # for col in census.columns:
 #     if col not in non_numeric:
 #         census[col] = pd.to_numeric(census[col], errors="coerce")  # Convert non-numeric to NaN
-# census.to_file(data, layer='census_for_regression')
+# census.to_file(data, layer='census_for_analysis')
 # fiona.listlayers(data)
-# census = gpd.read_file(data,layer='census_for_regression')
+# census = gpd.read_file(data,layer='census_for_analysis')
 
-
-# SELECTING / CREATING VARIABLES FOR REGRESSION ANALYSIS
+# SELECTING / CREATING VARIABLES FOR REGRESSION ANALYSIS ########################################
 lower_wage = ['cleaning_workers', 'construction_workers', 'transport_machinery_workers',
     'production_process_workers', 'agri_workers', 'service_workers' ]
 high_wage = ['managers','professional_workers']
@@ -67,6 +66,69 @@ census['prop_6hh'] = census['6p_househ']/census['n_households']
 census['prop_7hh'] = census['7p_househ']/census['n_households']
 census['prop_hh_u6'] = census['househ_w_under6yo']/census['n_households']
 census['prop_hh_head20'] = census['headhouseh_in20s']/census['n_households']
+
+# INEQUALITY ANALYSIS ##########################################################################
+
+accessibility_measures = [
+    'log_vl_ugs_accessibility', 'log_lg_ugs_accessibility',
+    'log_md_ugs_accessibility', 'log_sm_ugs_accessibility',
+    'log_full_ugs_accessibility'
+]
+
+for measure in accessibility_measures:  # normalize accessibility indexes
+    min_val = census[measure].min()
+    max_val = census[measure].max()
+    census[measure + '_norm'] = (census[measure] - min_val) / (max_val - min_val)
+    
+def lorenz_curve(data):
+    """Compute the Lorenz curve."""
+    data_sorted = np.sort(data)
+    cumulative = np.cumsum(data_sorted) / data_sorted.sum()
+    cumulative = np.insert(cumulative, 0, 0)  # Add (0,0) to the curve
+    return cumulative
+
+
+
+# LORENZ CURVE PLOT
+plt.figure(figsize=(10,8))
+
+for measure in accessibility_measures:
+    data =census[measure].values
+    lorenz = lorenz_curve(data)
+    plt.plot(np.linspace(0, 1, len(lorenz)), lorenz, label=measure)
+
+# equality line
+plt.plot([0, 1], [0, 1], linestyle='--', color='black', label='Equality Line')
+
+plt.xlabel('Cumulative Share of Population')
+plt.ylabel('Cumulative Share of Accessibility')
+plt.title('Lorenz Curves for Accessibility Measures')
+plt.legend()
+plt.grid(True)
+plt.show()
+
+# GINI INDEX
+def gini_coefficient(data):
+    """Compute the Gini coefficient."""
+    data_sorted = np.sort(data)
+    n = len(data)
+    cumulative = np.cumsum(data_sorted) / data_sorted.sum()
+    gini_index = 1 - 2 * np.trapz(cumulative, dx=1/n)
+    return gini_index
+
+# compute Gini index for each accessibility measure
+for measure in accessibility_measures:
+    data = census[measure + '_norm'].dropna().values
+    gini = gini_coefficient(data)
+    print(f'Gini Coefficient for {measure}: {gini:.2f}')
+    
+#####################################################################################
+# REGRESSION ANALYSIS ###############################################################
+#####################################################################################
+
+# TODO add dummy for 'close to riverside'
+# TODO add dummy for 'harbour area' / remove observations in harbour area 
+# harbour area observations may potentially be removed before computing Gini/Lorenz
 
 # EXPLORATORY DATA ANALYSIS
 # check issue in population distributions: based on results fixe the e2sfca.py
@@ -101,7 +163,7 @@ census[census['prop_15_64'] > 0.9]["KEY_CODE_3"].count()
 census[census['prop_1hh'] > 0.9]["KEY_CODE_3"].count()
 census[census['prop_hh_head20'] > 0.8]["KEY_CODE_3"].count()
 
-# TODO add to problematic census prop_15_64, prop_1hh prop_hh_head20 
+
 problematic_census = set()
 problematic_census.update(census[census['prop_o65_pop'] > 0.8]["KEY_CODE_3"])
 problematic_census.update(census[census['prop_o75_pop'] > 0.7]["KEY_CODE_3"])
@@ -122,20 +184,15 @@ plot_census_points_with_basemap(census, 'over', 4000) # do these locations make 
 census[census['pop_tot']>4000]
 
 # indepedent variables
-X = ['pop_tot', '', '','prop_young_pop', 'prop_o65_pop', 'prop_o75_pop', 'prop_foreign_pop',
-       'prop_hh_only_elderly', 'prop_managers',
-       'prop_high_earning', 'prop_uni_graduates', 'price_mean',
-       ]
-
 relevant_attributes = ['prop_young_pop', 'prop_o65_pop', 'prop_o75_pop', 'prop_foreign_pop',
-       'prop_hh_only_elderly', 'prop_managers', 'vl_ugs_accessibility',
-       'prop_high_wage', 'prop_low_wage', 'prop_uni_graduates', 'price_mean', 'prop_15_64', 'prop_1hh', 'prop_hh_head20'
-        ]
+       'prop_hh_only_elderly', 'prop_managers', 'prop_high_wage', 'prop_low_wage', 
+       'prop_uni_graduates', 'price_mean', 'prop_15_64', 'prop_1hh', 'prop_hh_head20',
+       'log_vl_ugs_accessibility', 'log_vl_ugs_accessibility_norm',
+       'log_full_ugs_accessibility', 'log_full_ugs_accessibility_norm' ]
 
 rdata = census[relevant_attributes]
 
-# distribution
-# Set up the figure
+# analayze the distirbution of the regressors
 plt.figure(figsize=(15, 10))
 
 # Plot histograms for all numerical columns
@@ -156,10 +213,6 @@ sns.heatmap(corr_matrix, annot=True, cmap='coolwarm', fmt=".2f", linewidths=0.5)
 plt.title("Correlation Matrix")
 plt.show()
 
-# Pairplot for selected columns
-#sns.pairplot(rdata)
-#plt.show()
-
 # Set up the figure
 plt.figure(figsize=(15, 10))
 
@@ -173,28 +226,24 @@ for i, column in enumerate(rdata.columns, 1):
 plt.show()
 
 # Calculate VIF for each variable
-vif_data = pd.DataFrame()
-vif_data["Variable"] = rdata.columns
-vif_data["VIF"] = [variance_inflation_factor(rdata.values, i) for i in range(rdata.shape[1])]
+
 
 # Check for missing values
-print(rdata.isnull().sum())
-rdata = rdata.replace(np.nan).dropna()
+rdata = rdata.replace(np.nan, 0)
 
 vif_data = pd.DataFrame()
 vif_data["Variable"] = rdata.columns
 vif_data["VIF"] = [variance_inflation_factor(rdata.values, i) for i in range(rdata.shape[1])]
 
-print(vif_data) # obviously
-
-
+print(vif_data) # obviously crazy high 
 
 
 ## PCA ################################################################## 
 
 # remove non numeric column and target variables
 features = rdata.drop(columns=[ #'KEY_CODE_3', 'name_ja', 'name_en', 'geometry', 'full_ugs_accessibility', 'lg_ugs_accessibility','md_ugs_accessibility','sm_ugs_accessibility'
-                                 'vl_ugs_accessibility'
+                                 'log_vl_ugs_accessibility', 'log_full_ugs_accessibility',
+                                 'log_vl_ugs_accessibility_norm', 'log_full_ugs_accessibility_norm'
                                 ])
 
 
@@ -223,10 +272,7 @@ plt.show()
 n_components = 3#(cumulative_explained_variance <= 0.75).sum()
 pca = PCA(n_components=n_components)
 rdata_pca = pca.fit_transform(rdata_standardized)
-
-# create a df
 rdata_pca_df = pd.DataFrame(rdata_pca, columns=[f"PC{i+1}" for i in range(n_components)])
-print(rdata_pca_df.head())
 
 # look at loadings to interpret the components
 loadings = pd.DataFrame(pca.components_, columns=features.columns, index=[f"PC{i+1}" for i in range(n_components)])
@@ -235,7 +281,7 @@ print(loadings)
 
 # inspect correlation between components and accessibility
 
-rdata_pca_df["vl_ugs_accessibility"] = rdata["vl_ugs_accessibility"].values
+rdata_pca_df["log_vl_ugs_accessibility"] = rdata["log_vl_ugs_accessibility"].values
 correlation_matrix = rdata_pca_df.corr()
 
 plt.figure(figsize=(8, 6))
@@ -243,10 +289,5 @@ sns.heatmap(correlation_matrix, annot=True, cmap="coolwarm", fmt=".2f", linewidt
 plt.title("Correlation between PCA Components and vl_ugs_accessibility")
 plt.show()
 
-
 # TODO associate ward names to parks using wards layer. Use it for visualizations
-
-# TODO Gini index of accessibility
-# TODO Lorenz curve of accessibility
-# TODO GWR: fix issue with library  
 

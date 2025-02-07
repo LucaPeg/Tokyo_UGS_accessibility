@@ -444,3 +444,48 @@ def plot_parks_ratio_people(parks, ugs_ratio_threshold, perimeter_gdf=None, base
     ax.legend()
     
     plt.show()
+    
+    
+def plot_census_accessibility(census, acc_threshold=0, acc_type=None, perimeter=None, basemap=True):
+    """
+    Plots park polygons above a ugs_ratio threshold. Color represents 'ugs_ratio' attribute.
+
+    Parameters:
+    - parks (GeoDataFrame): The GeoDataFrame containing park polygons (with 'ugs_ratio' attribute).
+    - ugs_ratio_threshold (float): Minimum value of 'ugs_ratio' to plot a park.
+    - perimeter_gdf (GeoDataFrame): Optional, overlays a boundary (like the study area one)
+    - basemap (bool): If True, adds a basemap (Carto).
+    """
+    # filter parks
+    if acc_type is None:
+        acc_type = "log_vl_ugs_accessibility"
+    filtered_census = census[census[acc_type] >= acc_threshold]
+    
+    # colormap (green to red)
+    cmap = LinearSegmentedColormap.from_list('red_green', ['red', 'yellow', 'green'])
+    
+    # Plot
+    fig, ax = plt.subplots(1, 1, figsize=(10, 10))
+    filtered_census.plot(
+        ax=ax,
+        column=acc_type,  
+        cmap=cmap,
+        legend=True,
+        legend_kwds={'label': "Accessibility Index", 'orientation': "vertical"}
+    )
+
+    if perimeter is not None:
+        perimeter.geometry.plot(ax=ax, color='black', linewidth=0.5, label='Study Area Boundary')
+    
+    # Basemap is by default
+    if basemap:
+        ctx.add_basemap(
+            ax,
+            crs=filtered_census.crs.to_string(),
+            source=ctx.providers.CartoDB.Positron  # Use a terrain basemap
+        )
+    
+    ax.set_title(f"Census units by accessibility value - {acc_type}", fontsize=14)
+    ax.set_axis_off()
+    
+    plt.show()
