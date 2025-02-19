@@ -105,14 +105,6 @@ def check_bandwidths(y, X, bandwidths):
     results_df = pd.DataFrame(results)
     return results_df
 
-def truncate_colormap(cmap, minval=0.0, maxval=1.0, n=100):
-    """
-    Truncates a colormap to a specified range.
-    """
-    new_cmap = LinearSegmentedColormap.from_list(
-        'trunc({n},{a:.2f},{b:.2f})'.format(n=cmap.name, a=minval, b=maxval),
-        cmap(np.linspace(minval, maxval, n)))
-    return new_cmap
 
 # import data
 data = os.path.join("..\\data\\final\\ugs_analysis_data.gpkg")
@@ -277,8 +269,7 @@ census[census['pop_tot']>4000] # They do make sense -> Japanese Tower Buldings
 relevant_attributes = ['prop_young_pop', 'prop_o65_pop', 'prop_o75_pop', 'prop_foreign_pop',
        'prop_hh_only_elderly', 'prop_managers', 'prop_high_wage', 'prop_low_wage', 
        'prop_uni_graduates', 'price_std', 'prop_15_64', 'prop_1hh', 'prop_hh_head20',
-        'log_vl_ugs_accessibility_norm', 'log_full_ugs_accessibility_norm', 'KEY_CODE_3', 'geometry',
-        ]
+        'log_vl_ugs_accessibility_norm', 'log_full_ugs_accessibility_norm', 'KEY_CODE_3', 'geometry']
 
 
 rdata = census[relevant_attributes]
@@ -588,8 +579,9 @@ print(vif_pca)
 # Reduced model (RED) #################################################################################
 X_red = rdata[['prop_foreign_pop', 'prop_young_pop' ,'prop_hh_only_elderly',
                'prop_managers','price_std']].values
-#bw_red = mgwr.sel_bw.Sel_BW(coords, y, X_red).search() 
-gwr_red_model = GWR(coords, y, X_red, 4000) # I substituted bw_red with 200
+
+bw_red = mgwr.sel_bw.Sel_BW(coords, y, X_red).search(bw_min=500, bw_max=4000) # always chooses the lowest bound
+gwr_red_model = GWR(coords, y, X_red, bw_red) # I substituted bw_red with 200
 gwr_red_results = gwr_red_model.fit()
 params_red = gwr_red_results.params  # This gives the estimated coefficients for each variables
 gwr_red_results.summary()
@@ -649,9 +641,6 @@ plt.show()
 X_red_st = (X_red - X_red.mean(axis = 0)) / X_red.std(axis = 0)
 y_st = (y - y.mean(axis = 0)) / y.std(axis = 0)
 
-# Add intercept
-X_red_st = np.hstack([np.ones((X.shape[0], 1)), X_red_st])  # Adds a column of ones for the intercept | I didn't do this, but still get 6 coefficients
-
 # bandwith selection
 mgwr_red_selector = Sel_BW(coords, y_st, X_red_st, multi = True) 
 mgwr_bw = mgwr_red_selector.search() # this takes such a long time (134minutes) array([ 43.,  52.,  52., 832.,  44.,  44.])
@@ -661,33 +650,25 @@ mgwr_red_model = MGWR(coords, y_st, X_red_st, mgwr_red_selector, fixed=False)
 mgwr_red_results = mgwr_red_model.fit()
 mgwr_red_results.summary() # I call on mgwr_results because I modified the variable name, however mgwr_results is loaded in memory
 
+#   extract coefficent estimates
+results['mgwr_red_intercept'] = mgwr_red_results.params[:,0] 
+results['mgwr_red_foreign'] = mgwr_red_results.params[:,1]
+results['mgwr_red_young'] = mgwr_red_results.params[:,2]
+results['mgwr_pca_elderly'] = mgwr_red_results.params[:,3]
+results['mgwr_red_managers'] = mgwr_red_results.params[:,4]
+results['mgwr_pca_price'] = mgwr_red_results.params[:,5]
 
-# MGWR with PCA #################################################################################
-Xpca_st = Xpca - Xpca.mean(axis=0) / Xpca.std(axis=0)
-Xpca_st = np.hstack([np.ones((X.shape[0],1)), Xpca_st]) # add intercept
-mgwr_pca_selector = Sel_BW(coords, y_st, Xpca_st, multi = True) 
-mgwr_pca_bw = mgwr_pca_selector.search() 
-mgwr_pca_model = MGWR(coords, y_st, Xpca_st, mgwr_pca_selector)
-mgwr_pca_results = mgwr_pca_model.fit()
-mgwr_pca_results.summary()
-
-# Check coefficients significance locally
-print(mgwr_pca_bw) # print bandwidths
-results['mgwr_pca_intercept'] = mgwr_pca_results.params[:,0] 
-results['mgwr_pca_PC1'] = mgwr_pca_results.params[:,1]
-results['mgwr_pca_PC2'] = mgwr_pca_results.params[:,2]
-results['mgwr_pca_PC3'] = mgwr_pca_results.params[:,3]
 # get t-values
-mgwr_pca_fil_t = mgwr_pca_results.filter_tvals()
+mgwr_red_fil_t = mgwr_red_results.filter_tvals()
 
-for i, var in enumerate(['intercept','PC1','PC2','PC3']):
-    results[f'{var}_param'] = mgwr_pca_results.params[:, i]  # Raw coefficients
-    results[f'{var}_param_tc'] = mgwr_pca_fil_t[:, i]  # Corrected t-values
+for i, var in enumerate(['intercept','prop_foreigners','prop_young','propr_elderly_hh','prop_managers','house_price']):
+    results[f'{var}_param'] = mgwr_red_results.params[:, i]  # Raw coefficients
+    results[f'{var}_param_tc'] = mgwr_red_fil_t[:, i]  # Corrected t-values
 
 # Create subplots (each variable has 2 plots: raw & corrected)
 fig, axes = plt.subplots(6, 2, figsize=(16, 32))  # 8 variables, 2 columns
 
-for i, var in enumerate(['intercept','PC1','PC2','PC3']):
+for i, var in enumerate(['intercept','prop_foreigners','prop_young','propr_elderly_hh','prop_managers','house_price']):
     # Row index for each variable
     row = i  
 
@@ -711,6 +692,52 @@ plt.tight_layout()
 plt.show()
 
 
+# MGWR with PCA #################################################################################
+Xpca_st = Xpca - Xpca.mean(axis=0) / Xpca.std(axis=0)
+mgwr_pca_selector = Sel_BW(coords, y_st, Xpca_st, multi = True) 
+mgwr_pca_bw = mgwr_pca_selector.search() 
+mgwr_pca_model = MGWR(coords, y_st, Xpca_st, mgwr_pca_selector)
+mgwr_pca_results = mgwr_pca_model.fit()
+mgwr_pca_results.summary()
+
+# Check coefficients significance locally
+print(mgwr_pca_bw) # print bandwidths
+results['mgwr_pca_intercept'] = mgwr_pca_results.params[:,0] 
+results['mgwr_pca_PC1'] = mgwr_pca_results.params[:,1]
+results['mgwr_pca_PC2'] = mgwr_pca_results.params[:,2]
+results['mgwr_pca_PC3'] = mgwr_pca_results.params[:,3]
+# get t-values
+mgwr_pca_fil_t = mgwr_pca_results.filter_tvals()
+
+for i, var in enumerate(['intercept','PC1','PC2','PC3']):
+    results[f'{var}_param'] = mgwr_pca_results.params[:, i]  # Raw coefficients
+    results[f'{var}_param_tc'] = mgwr_pca_fil_t[:, i]  # Corrected t-values
+
+# Create subplots (each variable has 2 plots: raw & corrected)
+fig, axes = plt.subplots(4, 2, figsize=(16, 32))  # 8 variables, 2 columns
+
+for i, var in enumerate(['intercept','PC1','PC2','PC3']):
+    # Row index for each variable
+    row = i  
+
+    # Plot raw GWR coefficients
+    results.plot(f'{var}_param', ax=axes[row, 0], legend=True,
+                 edgecolor='black', alpha=0.65, linewidth=0.5)
+    axes[row, 0].set_title(f'Raw GWR Coefficients: {var}')
+    axes[row, 0].axis('off')
+
+    # Plot corrected coefficients (non-significant areas in grey)
+    results.plot(f'{var}_param', ax=axes[row, 1], legend=True,
+                 edgecolor='black', alpha=0.65, linewidth=0.5)
+    results[results[f'{var}_param_tc'] == 0].plot(color='grey', ax=axes[row, 1], 
+                                                  edgecolor='black', linewidth=0.5)  
+    axes[row, 1].set_title(f'Corrected GWR Coefficients: {var}')
+    axes[row, 1].axis('off')
+
+# Global title
+#plt.suptitle('GWR Results: Raw vs. Corrected Coefficients', fontsize=18)
+plt.tight_layout()
+plt.show()
 
 # Compare local multicollinearity between GWR and MGWR
 gwr_red_lc = gwr_red_results.local_collinearity()
@@ -815,7 +842,7 @@ plt.show()
 # DEAL WITH OVERFITTING #############################################################
 # issue with my models: they tend to overfit too much
 
-bandwidths = np.arange(0, 5000, 10)
+bandwidths = np.arange(0, 3500, 50)
 bw_red = check_bandwidths(y, X_red, bandwidths)
 
 # bandwidth and adj_R2
@@ -852,75 +879,11 @@ cols_pca = ['PC1','PC2','PC3' ]
 
 plot_bandwidth_effect(rdata, cols_reduced, 'prop_mangers', bws=[60, 200, 500, 1000, 2000, 3000])
 plot_bandwidth_effect(rdata, cols_pca, 'PC1')
+plot_bandwidth_effect(rdata, cols_pca, 'PC1', bws=[60, 200, 500, 1000, 2000, 3000])
 
 
-
-# DIVIDE IN TRAIN AND TEST #########################################
-def compute_gwr_cv_mse(coords, y, X, bandwidths, kernel='gaussian', k=5):
-    """
-    Compute cross-validation MSE for different bandwidths in GWR.
-
-    Args:
-        coords (np.array): Spatial coordinates (n,2).
-        y (np.array): Target variable (n,).
-        X (np.array): Feature matrix (n,p).
-        bandwidths (list): List of bandwidths to test.
-        kernel (str): Kernel type ('gaussian' or 'bisquare').
-        k (int): Number of folds for cross-validation.
-
-    Returns:
-        list: List of average MSEs for each bandwidth.
-    """
-    kf = KFold(n_splits=k, shuffle=True, random_state=42)
-    mse_values = []
-    coords = np.array(coords)
-    
-    for bw in bandwidths:
-        mse_list = []
-
-        for train_idx, test_idx in kf.split(coords):
-            
-            coords_train, coords_test = coords[train_idx], coords[test_idx]
-            X_train, X_test = X[train_idx], X[test_idx]
-            y_train, y_test = y[train_idx], y[test_idx]
-            gwr_model = GWR(coords_train, y_train, X_train, bw, kernel=kernel)
-            gwr_results = gwr_model.fit()
-
-                        # Make predictions using the trained GWR model
-            pred_results = gwr_model.predict(coords_test, X_test)
-            y_pred = pred_results.predictions.flatten()  # Extract predicted values
-
-            # Compute MSE
-            mse = np.mean((y_test - y_pred) ** 2)
-            mse_list.append(mse)
-
-        avg_mse = np.mean(mse_list)
-        mse_values.append(avg_mse)
-        print(f"Bandwidth: {bw}, MSE: {avg_mse:.5f}")
-
-    return mse_values
-
-# Define bandwidths to test
-bandwidths1 = np.arange(50, 2500, 100)  # Test bandwidths from 500 to 5000 in steps of 500
-
-# Compute MSE for each bandwidth
-mse_values = compute_gwr_cv_mse(coords, y, X_red, bandwidths1)
-
-# Plot MSE vs. Bandwidth
-plt.figure(figsize=(8,5))
-plt.plot(bandwidths1, mse_values, marker='o', linestyle='-')
-plt.xlabel("Bandwidth")
-plt.ylabel("Cross-Validation MSE")
-plt.title("GWR Bandwidth Selection via CV")
-plt.grid(True)
-plt.show()
-
-# TODO | THINGS I WANT TO TRY DOING
-# set minimum bandwidth in automatic selection | Try with non-adaptive too!
-
-# Mixed measure: both mse and prop of significant coefficients
-
-def compute_gwr_cv_metrics(coords, y, X, bandwidths, kernel='gaussian', k=5, exclude_intercept=True):
+# CROSS VALIDATION #########################################
+def compute_gwr_cv_metrics(coords, y, X, bandwidths, kernel='gaussian', k=5): #, exclude_intercept=True
     """
     For each candidate bandwidth, perform k-fold CV and compute:
       - Average MSE on the test folds
@@ -991,28 +954,100 @@ def compute_gwr_cv_metrics(coords, y, X, bandwidths, kernel='gaussian', k=5, exc
         print(f"Bandwidth: {bw}, CV MSE: {np.mean(fold_mse):.5f}, % Significant: {np.mean(fold_signif)*100:.1f}%")
     
     return mse_values, signif_values
+def plot_mse_signif(mse, significance, bw):
+    fig, ax1 = plt.subplots(figsize=(10, 6))
 
-bandwidths2 = np.arange(50, 5000, 500)
+    color = 'tab:blue'
+    ax1.set_xlabel('Bandwidth')
+    ax1.set_ylabel('CV MSE', color=color)
+    ax1.plot(bandwidths, mse, marker='o', color=color, label='CV MSE')
+    ax1.tick_params(axis='y', labelcolor=color)
+
+    ax2 = ax1.twinx()  # create a second y-axis that shares the same x-axis
+    color = 'tab:red'
+    ax2.set_ylabel('% Significant Coefficients', color=color)
+    # Convert proportion to percentage:
+    ax2.plot(bandwidths, np.array(significance)*100, marker='s', color=color, label='% Significant')
+    ax2.tick_params(axis='y', labelcolor=color)
+
+    fig.tight_layout()
+    plt.title('CV MSE and Local Significance vs. Bandwidth')
+    plt.show()
+
+
+# Define bandwidths to test
+bandwidths = np.arange(50, 3000, 100)  # Test bandwidths from 500 to 5000 in steps of 500
 
 # Compute CV metrics
-mse_vals, signif_vals = compute_gwr_cv_metrics(coords, y, X_red, bandwidths2, kernel='gaussian', k=5)
+mse_vals, signif_vals = compute_gwr_cv_metrics(coords, y, X_red, bandwidths, kernel='gaussian', k=5)
+plot_mse_signif(mse_vals, signif_vals, bandwidths)
 
-# Plotting: We'll create a dual-axis plot
-fig, ax1 = plt.subplots(figsize=(10, 6))
+# Test MSE with PCA
+pca_mse, pca_sign = compute_gwr_cv_metrics(coords, y, Xpca, bandwidths)
+plot_mse_signif(pca_mse, pca_sign, bandwidths)
 
-color = 'tab:blue'
-ax1.set_xlabel('Bandwidth')
-ax1.set_ylabel('CV MSE', color=color)
-ax1.plot(bandwidths2, mse_vals, marker='o', color=color, label='CV MSE')
-ax1.tick_params(axis='y', labelcolor=color)
+# Check local coeff significance
+def plot_local_coeff(data, varlist, bw):
+    """Takes a gdf, list of variables and bandwidth. Plots the local coefficients
+    NB: varlist automatically includes the intercept
+    """
+    X_values = data[varlist].values
+    y = data['log_full_ugs_accessibility_norm'].values.reshape(-1, 1)
+    gwr_results = GWR(coords, y, X_values, bw).fit()
+    
+    results_df = data[['KEY_CODE_3', 'geometry','longitude','latitude']]
+    filter_tc = gwr_results.filter_tvals()  # Compute t-values once
+    varlist.insert(0,'Intercept')
+    for i, var in enumerate(varlist):
+        results_df[f'{var}_param'] = gwr_results.params[:, i]  # Raw coefficients
+        results_df[f'{var}_param_tc'] = filter_tc[:, i]  # Corrected t-values
 
-ax2 = ax1.twinx()  # create a second y-axis that shares the same x-axis
-color = 'tab:red'
-ax2.set_ylabel('% Significant Coefficients', color=color)
-# Convert proportion to percentage:
-ax2.plot(bandwidths, np.array(signif_vals)*100, marker='s', color=color, label='% Significant')
-ax2.tick_params(axis='y', labelcolor=color)
+    # Create subplots (each variable has 2 plots: raw & corrected)
+    fig, axes = plt.subplots(len(varlist), 2, figsize=(16, 32))  # 8 variables, 2 columns
 
-fig.tight_layout()
-plt.title('CV MSE and Local Significance vs. Bandwidth')
-plt.show()
+    for i, var in enumerate(varlist):
+        # Row index for each variable
+        row = i  
+
+        # Plot raw GWR coefficients
+        results_df.plot(f'{var}_param', ax=axes[row, 0], legend=True,
+                    edgecolor='black', alpha=0.65, linewidth=0.5)
+        axes[row, 0].set_title(f'Raw GWR Coefficients: {var}')
+        axes[row, 0].axis('off')
+
+        # Plot corrected coefficients (non-significant areas in grey)
+        results_df.plot(f'{var}_param', ax=axes[row, 1], legend=True,
+                    edgecolor='black', alpha=0.65, linewidth=0.5)
+        results_df[results_df[f'{var}_param_tc'] == 0].plot(color='grey', ax=axes[row, 1], 
+                                                    edgecolor='black', linewidth=0.5)  
+        axes[row, 1].set_title(f'Corrected GWR Coefficients: {var}')
+        axes[row, 1].axis('off')
+
+    #plt.suptitle('GWR Results: Raw vs. Corrected Coefficients', fontsize=18)
+    plt.tight_layout()
+    plt.show()
+
+plot_local_coeff(rdata, ['PC1', 'PC2','PC3'], 2000)
+plot_local_coeff(rdata, cols_reduced, 60)
+plot_local_coeff(rdata, cols_reduced, 1500)
+
+
+
+# TODO Geographic EDA
+# TODO model selection in R -> LASSO 
+# TODO after the regression check for spatial non-stationarity
+# robust GWR -> for outliers
+# mixed GWR -> for variables that don't vary locally
+
+
+# TODO -> it is impossile that with 50 bandiwdth 38% of the coefficients are significant -> the plots are all grey!
+# set minimum bandwidth in automatic selection | Try with non-adaptive too!
+
+
+
+
+gwr_pca_results.filter_tvals()
+
+
+rdata = rdata.drop(columns=['centroid','landfill','arakawa'])
+rdata.to_file('../data/final/regression_data', driver="Geojson")
