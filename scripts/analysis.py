@@ -36,6 +36,7 @@ from libpysal.weights import KNN
 from libpysal.weights import W
 import statsmodels.api as sm
 from esda.moran import Moran
+from esda.moran import Moran_Local
 from scipy.stats import shapiro
 np.float = float  # temporary fix for deprecated np.float 
 
@@ -72,14 +73,17 @@ def plot_bandwidth_effect(data, varlist, variable, bws=False):
 
     if bws is False:
         bws = [60, 120, 240, 600, 1000, 2000]
-
+    coords = list(zip(data['longitude'], data['latitude']))
+    
+    y = data['log_full_ugs_accessibility_norm'].values.reshape(-1, 1)
+    
     vmins = []
     vmaxs = []
     params = data[['geometry']].copy()
     X_values = data[varlist].values
     X_w_names = pd.DataFrame(X_values, columns=varlist)
-    var_index = X_w_names.columns.get_loc(variable) + 1
-
+    var_index = X_w_names.columns.get_loc(variable) + 1  # +1 to account for the intercept
+    
     # Compute GWR for each bandwidth and collect parameter values
     for bw in bws:
         gwr_model = GWR(coords, y, X_values, bw)
@@ -87,26 +91,44 @@ def plot_bandwidth_effect(data, varlist, variable, bws=False):
         params[f'{variable}_{bw}'] = gwr_results.params[:, var_index] 
         vmins.append(params[f'{variable}_{bw}'].min())
         vmaxs.append(params[f'{variable}_{bw}'].max())
-
-    vmin, vmax = min(vmins), max(vmaxs)  # Get global color scale limits
-
-    # Plot each GWR result as a choropleth map
-    for i, col in enumerate(params.columns[1:]):  # Skip geometry column
-        params.plot(column=col, ax=ax[i], cmap='viridis', legend=False,
+    
+    vmin, vmax = min(vmins), max(vmaxs)  # Global color scale limits
+    
+    # Create subplots dynamically (max 3 columns)
+    n_vars = len(params.columns) - 1  # Exclude geometry
+    max_cols = 3
+    n_cols = min(n_vars, max_cols)
+    n_rows = math.ceil(n_vars / n_cols)
+    
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(5*n_cols, 5*n_rows))
+    if n_vars == 1:
+        axes = [axes]
+    else:
+        axes = axes.flatten()
+    
+    # Skip the geometry column when plotting
+    plot_cols = [col for col in params.columns if col != 'geometry']
+    for i, col in enumerate(plot_cols):
+        ax = axes[i]
+        params.plot(column=col, cmap='viridis', legend=False, ax=ax,
                     vmin=vmin, vmax=vmax, edgecolor='black', linewidth=0.1)
-        ax[i].set_title(f"Bandwidth: {bws[i]}")
-        ax[i].axis("off")
-
-    # Add a single color bar to the right of the plots
+        ax.set_title(f"Bandwidth: {bws[i]}")
+        ax.axis("off")
+    
+    # Hide any extra axes
+    for j in range(i+1, len(axes)):
+        axes[j].axis("off")
+    
+    # Add a single colorbar to the figure
+    import matplotlib as mpl
     sm = plt.cm.ScalarMappable(cmap='viridis', norm=plt.Normalize(vmin=vmin, vmax=vmax))
-    sm._A = []  # Empty array for the ScalarMappable
-    cbar = fig.colorbar(sm, ax=ax.tolist(), fraction=0.025, pad=0.04)
+    sm._A = []  # Dummy array for the ScalarMappable
+    cbar = fig.colorbar(sm, ax=axes.tolist(), fraction=0.025, pad=0.04)
     cbar.set_label(f'{variable} coefficient')
-
+    
     fig.suptitle(f"Effect of {variable} across different bandwidths", fontsize=16, y=1.05)
-    fig.subplots_adjust(right=0.9)  # More space for the color bar on the right
-    fig.tight_layout(rect=[0, 0, 0.9, 1])  # Adjust layout for better spacing
-
+    fig.subplots_adjust(right=0.9)
+    fig.tight_layout(rect=[0, 0, 0.9, 1])
     plt.show()
 
 def check_bandwidths(y, X, bandwidths):
@@ -1114,8 +1136,53 @@ cols_reduced = ['prop_foreign_pop', 'prop_young_pop' ,'prop_hh_only_elderly',
                'prop_managers','price_std' ]
 cols_pca = ['PC1','PC2','PC3' ]
 
+
+def plot_bandwidth_effect(data, varlist, variable, bws=False):
+    fig, ax = plt.subplots(2, 3, figsize=(12, 8))
+    ax = ax.flatten()
+
+    if bws is False:
+        bws = [60, 120, 240, 600, 1000, 2000]
+
+    vmins = []
+    vmaxs = []
+    params = data[['geometry']].copy()
+    X_values = data[varlist].values
+    X_w_names = pd.DataFrame(X_values, columns=varlist)
+    var_index = X_w_names.columns.get_loc(variable) + 1
+
+    # Compute GWR for each bandwidth and collect parameter values
+    for bw in bws:
+        gwr_model = GWR(coords, y, X_values, bw)
+        gwr_results = gwr_model.fit()
+        params[f'{variable}_{bw}'] = gwr_results.params[:, var_index] 
+        vmins.append(params[f'{variable}_{bw}'].min())
+        vmaxs.append(params[f'{variable}_{bw}'].max())
+
+    vmin, vmax = min(vmins), max(vmaxs)  # Get global color scale limits
+
+    # Plot each GWR result as a choropleth map
+    for i, col in enumerate(params.columns[1:]):  # Skip geometry column
+        params.plot(column=col, ax=ax[i], cmap='viridis', legend=False,
+                    vmin=vmin, vmax=vmax, edgecolor='black', linewidth=0.1)
+        ax[i].set_title(f"Bandwidth: {bws[i]}")
+        ax[i].axis("off")
+
+    # Add a single color bar to the right of the plots
+    sm = plt.cm.ScalarMappable(cmap='viridis', norm=plt.Normalize(vmin=vmin, vmax=vmax))
+    sm._A = []  # Empty array for the ScalarMappable
+    cbar = fig.colorbar(sm, ax=ax.tolist(), fraction=0.025, pad=0.04)
+    cbar.set_label(f'{variable} coefficient')
+
+    fig.suptitle(f"Effect of {variable} across different bandwidths", fontsize=16, y=1.05)
+    fig.subplots_adjust(right=0.9)  # More space for the color bar on the right
+    fig.tight_layout(rect=[0, 0, 0.9, 1])  # Adjust layout for better spacing
+
+    plt.show()
+
+
 plot_bandwidth_effect(rdata, cols_reduced, 'prop_hh_only_elderly', bws=[60, 200, 500, 1000, 2000, 3000])
-plot_bandwidth_effect(rdata, cols_reduced, 'price_std') 
+plot_bandwidth_effect(rdata, cols_reduced, 'price_std')
 plot_bandwidth_effect(rdata, cols_pca, 'PC1')
 plot_bandwidth_effect(rdata, cols_pca, 'PC3')
 
@@ -1134,8 +1201,8 @@ plot_mse_signif(pca_mse, pca_sign, bandwidths)
 # Check local coeff significance
 cols_pca = ['PC1', 'PC2', 'PC3']
 cols_reduced = ['prop_foreign_pop', 'prop_young_pop', 'prop_hh_only_elderly', 'prop_managers', 'price_std']
-plot_local_coeff(rdata, cols_pca, 500 )
-plot_local_coeff(rdata, cols_pca, 2000 )
+plot_local_coeff(rdata, cols_pca, 500)
+plot_local_coeff(rdata, cols_pca, 2000)
 plot_local_coeff(rdata, cols_reduced, 500)
 plot_local_coeff(rdata, cols_reduced, 2000)
 
@@ -1324,7 +1391,7 @@ def plot_local_std(data, varlist, bw, y='full'):
     # Determine which columns to plot: only those ending with '_std'
     plot_cols = [col for col in df.columns if col.endswith('_std')]
     n_vars = len(plot_cols)
-    max_cols = 3
+    max_cols = 4
     n_cols = min(n_vars, max_cols)
     n_rows = math.ceil(n_vars / n_cols)
     
@@ -1362,8 +1429,9 @@ def plot_local_std(data, varlist, bw, y='full'):
     plt.show()
 
 # local standard deviations using bw = 60
-plot_local_std(rdata, cols_reduced, 1000, y='full')
-
+plot_local_std(rdata, cols_reduced, 88, y='full')
+plot_local_std(rdata, cols_reduced, 500, y='full')
+plot_local_std(rdata, cols_reduced, 1500, y='full')
 
 
 # check global std. dev. of each variable as bandwidth varies
@@ -1418,70 +1486,19 @@ def plot_mean_std_by_bw(data, varlist, bw_values, y='full', n_bootstraps=100):
 bw_values = range(50, 2051, 100)
 plot_mean_std_by_bw(rdata, cols_reduced, bw_values, y='full', n_bootstraps=100)
 
-
-# TODO run the following:
-plot_local_std(rdata, cols_reduced, 2000, y='full')
-plot_local_std(rdata, cols_reduced, 4000, y='full')
-bw_values = range(50, 2051, 100)
-plot_mean_std_by_bw(rdata, cols_reduced, bw_values, y='full', n_bootstraps=100)
-
-cols_alt = ['prop_foreign_pop', 'prop_young_pop', 'prop_hh_only_elderly', 'prop_managers',]
-
-alt_results = run_gwr(rdata, cols_alt, 500)
-alt_results.summary()
-plot_local_fit(alt_results)
-plot_local_coeff(rdata, cols_alt, 500)
-alt_results_vl = run_gwr(rdata, cols_alt, 500, 'vl')
-plot_local_fit(alt_results_vl)
-alt_results_vl.summary()
-
-cols_reduced = ['prop_foreign_pop', 'prop_young_pop', 'prop_hh_only_elderly', 'prop_managers', 'price_std']
-
-red_results = run_gwr(rdata, cols_reduced, 500)
-red_results.summary()
-red_results_vl = run_gwr(rdata, cols_reduced, 800, y='vl')
-red_results_vl.summary()
-plot_local_fit(red_results_vl)
-plot_local_coeff(rdata, cols_reduced, 500)
-
-vif_red = pd.DataFrame()
-red_df = rdata[cols_reduced]
-vif_red["Feature"] = red_df.columns
-vif_red["VIF"] = [variance_inflation_factor(red_df.values, i) for i in range(red_df.shape[1])]
-print(vif_red)
-
-cols_final = ['prop_foreign_pop', 'prop_1hh', 'prop_high_wage','prop_young_pop','prop_hh_only_elderly']
-
+# DIAGNOSTICS FUNCTIONS
 def get_vif(data, columns):
     vif_df = pd.DataFrame()
     df = data[columns]
     vif_df["Feature"] = df.columns
     vif_df["VIF"] = [variance_inflation_factor(df.values, i) for i in range(df.shape[1])]
     print(vif_df)
-
-get_vif(rdata, cols_alt)
-rdata
-pca_model = run_gwr(rdata, cols_pca, 500)
-pca_model.summary()
-plot_local_fit(pca_model)
-plot_local_coeff(rdata, cols_pca, 500)
-
-
-# FINAL MODELS: reduced and PCA
-from esda.moran import Moran_Local
-
-# REDUCED MODEL #####################################################################
-# 1. Check residuals for spatial autocorrelation:
-bw = 500
-red_model = run_gwr(rdata, cols_reduced, bw)
-pca_model = run_gwr(rdata, cols_pca, 500)
-
 def get_diagnostics(data, model, bw):
     """Performs regression diagnostics:
     1. Residuals spatial autocorrelation with Moran I
     2. QQ plot of residuals and Shapiro-Wilk test
     3. Residuals heteroscedasticity: Breusch Pagan test
-    
+    4. CooksD x Leverage
     Args:
         data (_gdf_): Geodataframe containing longitude and latitude
         model (_gwr_model_): obtained by running run_gwr
@@ -1540,9 +1557,66 @@ def get_diagnostics(data, model, bw):
         print("The residuals are heteroscedastic")
     else:
         print("The residuals are homoscedastic")
-    
+        
+        
+    cooks = model.cooksD
+    leverage = model.influ
+    # Get number of observations (n) and number of parameters (p)
+    n = len(model.y)
+    #p = red_model.params.shape[1]  # p includes intercept
+    p = int(model.ENP)
+    # Define thresholds:
+    cook_threshold = 4 / (n - p - 1)
+    lev_threshold = 2 * p / n  # or use 2*(p+1)/n if preferred
+
+    # Create scatter plot of leverage vs. Cook's distance
+    plt.figure(figsize=(8, 6))
+    plt.scatter(leverage, cooks, alpha=0.7, edgecolor='k')
+    plt.xlabel("Leverage")
+    plt.ylabel("Cook's Distance")
+    plt.title("Cook's Distance vs. Leverage")
+
+    # Add horizontal line for Cook's distance threshold and vertical line for leverage threshold
+    plt.axhline(y=cook_threshold, color='red', linestyle='--', 
+                label=f"Cook's threshold: {cook_threshold:.3f}")
+    plt.axvline(x=lev_threshold, color='blue', linestyle='--', 
+                label=f'Leverage threshold: {lev_threshold:.3f}')
+    plt.legend()
+    plt.show()
+
+
+# FINAL MODELS
+cols_reduced = ['prop_foreign_pop', 'prop_young_pop', 'prop_hh_only_elderly', 'prop_managers', 'price_std']
+cols_pca = ['PC1', 'PC2', 'PC3']
+
+# reduced model full
+red_model = run_gwr(rdata, cols_reduced, 500)
+red_model.summary()
 get_diagnostics(rdata, red_model, 500)
-get_diagnostics(rdata, pca_model, 500)
+get_vif(rdata, cols_reduced)
+plot_local_fit(red_model)
+plot_local_coeff(rdata, cols_reduced, 500)
+
+red_model_vl = run_gwr(rdata, cols_reduced, 500, y='vl')
+red_model_vl.summary()
+get_diagnostics(rdata, red_model_vl, 500)
+plot_local_fit(red_model_vl)
 
 
-rdata['price_std'].plot(kind='hist', bins=100)
+# PCA MODEL
+pca_model = run_gwr(rdata, cols_pca, 500)
+pca_model.summary()
+plot_local_fit(pca_model)
+plot_local_coeff(rdata, cols_pca, 500)
+get_diagnostics(rdata, cols_pca, 500)
+get_vif(rdata, cols_pca)
+
+pca_model_vl = run_gwr(rdata, cols_pca, 500, y='vl')
+pca_model_vl.summary()
+get_diagnostics(rdata, pca_model_vl, 500)
+plot_local_fit(pca_model_vl)
+
+
+
+
+
