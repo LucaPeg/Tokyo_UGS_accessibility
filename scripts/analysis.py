@@ -4,7 +4,9 @@ import pandas as pd
 import numpy as np
 import os
 import fiona
+import math
 import seaborn as sns
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
@@ -28,9 +30,29 @@ from matplotlib.colors import LinearSegmentedColormap
 from mgwr.gwr import GWR
 from statsmodels.stats.outliers_influence import variance_inflation_factor
 from accessibility_functions import plot_census_points_with_basemap
+from sklearn.utils import resample
+import esda
+from libpysal.weights import KNN
+from libpysal.weights import W
+import statsmodels.api as sm
+from esda.moran import Moran
+from scipy.stats import shapiro
 np.float = float  # temporary fix for deprecated np.float 
 
 # defining functions
+
+def run_gwr(data, varlist, bw, y='full'):
+    coords = list(zip(data['longitude'], data['latitude']))
+    X_values = np.hstack([np.ones((len(data), 1)), data[varlist].values])  # Add intercept
+    if y == 'full':
+        y = data['log_full_ugs_accessibility_norm'].values.reshape(-1, 1)
+    elif y == 'vl':
+        y = data['log_vl_ugs_accessibility_norm'].values.reshape(-1, 1)
+    else: 
+        raise ValueError("y must be 'full")
+    gwr_results = GWR(coords, y, X_values, bw).fit()
+    return gwr_results
+
 def plot_local_fit(model_results):
     """Given model results it plots the local fit (R2)"""
     results.loc[:,'locR2'] =  model_results.localR2
@@ -49,7 +71,7 @@ def plot_bandwidth_effect(data, varlist, variable, bws=False):
     ax = ax.flatten()
 
     if bws is False:
-        bws = [60, 120, 240, 400, 600, 800]
+        bws = [60, 120, 240, 600, 1000, 2000]
 
     vmins = []
     vmaxs = []
@@ -70,13 +92,13 @@ def plot_bandwidth_effect(data, varlist, variable, bws=False):
 
     # Plot each GWR result as a choropleth map
     for i, col in enumerate(params.columns[1:]):  # Skip geometry column
-        params.plot(column=col, ax=ax[i], cmap='coolwarm', legend=False,
+        params.plot(column=col, ax=ax[i], cmap='viridis', legend=False,
                     vmin=vmin, vmax=vmax, edgecolor='black', linewidth=0.1)
         ax[i].set_title(f"Bandwidth: {bws[i]}")
         ax[i].axis("off")
 
     # Add a single color bar to the right of the plots
-    sm = plt.cm.ScalarMappable(cmap='coolwarm', norm=plt.Normalize(vmin=vmin, vmax=vmax))
+    sm = plt.cm.ScalarMappable(cmap='viridis', norm=plt.Normalize(vmin=vmin, vmax=vmax))
     sm._A = []  # Empty array for the ScalarMappable
     cbar = fig.colorbar(sm, ax=ax.tolist(), fraction=0.025, pad=0.04)
     cbar.set_label(f'{variable} coefficient')
@@ -105,6 +127,258 @@ def check_bandwidths(y, X, bandwidths):
     results_df = pd.DataFrame(results)
     return results_df
 
+def plot_local_coeff(data, varlist, bw):
+    """Takes a gdf, list of variables, and bandwidth. Plots the local coefficients
+    (excluding the intercept from plots).
+    """
+    coords = list(zip(data['longitude'], data['latitude']))
+    X_values = np.hstack([np.ones((len(data), 1)), data[varlist].values])  # Add intercept
+    y = data['log_full_ugs_accessibility_norm'].values.reshape(-1, 1)
+    gwr_results = GWR(coords, y, X_values, bw).fit()
+
+    results_df = data[['KEY_CODE_3', 'geometry', 'longitude', 'latitude']]
+    filter_tc = gwr_results.filter_tvals()  # Compute t-values once
+
+    # Loop only over variables (excluding the intercept)
+    for i, var in enumerate(varlist):
+        results_df[f'{var}_param'] = gwr_results.params[:, i + 1]  # Skip intercept
+        results_df[f'{var}_param_tc'] = filter_tc[:, i + 1]  # Skip intercept
+
+    # Create subplots (each variable has 2 plots: raw & corrected)
+    fig, axes = plt.subplots(len(varlist), 2, figsize=(16, 4 * len(varlist)))
+
+    for i, var in enumerate(varlist):
+        # Plot raw GWR coefficients
+        results_df.plot(f'{var}_param', ax=axes[i, 0], legend=True,
+                        edgecolor='black', alpha=0.65, linewidth=0.5)
+        axes[i, 0].set_title(f'Raw GWR Coefficients: {var}')
+        axes[i, 0].axis('off')
+
+        # Plot corrected coefficients (non-significant areas in grey)
+        results_df.plot(f'{var}_param', ax=axes[i, 1], legend=True,
+                        edgecolor='black', alpha=0.65, linewidth=0.5)
+        results_df[results_df[f'{var}_param_tc'] == 0].plot(color='grey', ax=axes[i, 1], 
+                                                            edgecolor='black', linewidth=0.5)  
+        axes[i, 1].set_title(f'Corrected GWR Coefficients: {var}')
+        axes[i, 1].axis('off')
+
+    plt.tight_layout()
+    plt.show()
+
+def compute_multisignificance(data, varlist, bws, y='full'):
+    """
+    Computes adjusted R2 and the percentage of statistically significant coefficients
+    for each variable across different bandwidths.
+
+    Args:
+        data (pd.DataFrame): Data containing coordinates, dependent, and independent variables.
+        varlist (list): List of independent variable names.
+        bws (list): List of bandwidths to test.
+        y (str): Whether to use 'full' or 'vl' as the dependent variable.
+
+    Returns:
+        pd.DataFrame: A dataframe with adjusted R2 and significance percentages for each variable.
+    """
+    coords = list(zip(data['longitude'], data['latitude']))  # Fixed typo
+    X_values = data[varlist].values
+
+    if y == 'full':
+        y_values = data['log_full_ugs_accessibility_norm'].values.reshape(-1, 1)
+    elif y == 'vl':
+        y_values = data['log_vl_ugs_accessibility_norm'].values.reshape(-1, 1)
+    else:
+        raise ValueError("y must be 'full' or 'vl'")
+
+    results = []
+
+    for bw in bws:
+        gwr_results = GWR(coords, y_values, X_values, bw).fit()
+        R2 = gwr_results.adj_R2
+
+        # compute % of statistically significant coefficents
+        tvals_corr = gwr_results.filter_tvals()[:, 1:]  # Exclude intercept
+        signif_mask = tvals_corr != 0
+        signif_perc = np.mean(signif_mask, axis=0)  # Compute proportion for each variable
+        results.append([bw, R2] + list(signif_perc))
+
+        print(f"Bandwidth: {bw}, AdjR2: {R2:.5f}")
+
+    # Convert results to DataFrame
+    signif_df = pd.DataFrame(results, columns=['Bandwidth', 'AdjR2'] + varlist)
+    
+    return signif_df
+
+def plot_multisignificance(signif_df):
+    """
+    Plots Adjusted R² and percentage of statistically significant coefficients 
+    for each variable across different bandwidths.
+
+    Args:
+        signif_df (pd.DataFrame): DataFrame obtained with "compute_multisignificance()"
+    Returns:
+        a beautiful graph
+    """
+    varlist = signif_df.columns[2:]
+
+    fig, ax1 = plt.subplots(figsize=(8, 6))
+
+    # Plot Adjusted R² on primary y-axis
+    line1, = ax1.plot(signif_df['Bandwidth'], signif_df['AdjR2'], 'tab:blue', label='AdjR²')
+    ax1.set_xlabel('Bandwidth')
+    ax1.set_ylabel('Adjusted R²', color='tab:blue')
+    ax1.tick_params(axis='y', labelcolor='tab:blue')
+
+    # Secondary y-axis for percentage of significant coefficients
+    ax2 = ax1.twinx()
+    colors = plt.cm.viridis(np.linspace(0, 1, len(varlist)))  # Generate distinct colors
+    lines = [line1]  # Store all lines for a single legend
+    labels = ['AdjR²']
+
+    for var, color in zip(varlist, colors):
+        line, = ax2.plot(signif_df['Bandwidth'], signif_df[var] * 100, linestyle='--', color=color, label=var)  # Convert to %
+        lines.append(line)
+        labels.append(var)
+
+    ax2.set_ylabel('Significant Coefficient %', color='black')
+    ax2.tick_params(axis='y', labelcolor='black')
+
+    # Merge legends into one
+    ax1.legend(lines, labels, loc='center left', bbox_to_anchor=(1.1, 0.5), borderaxespad=0)
+
+    plt.title('Adjusted R² and % of Statistically Significant Coefficients')
+    plt.grid(True, linestyle='--', alpha=0.6)
+    plt.show()
+
+def lorenz_curve(data):
+    """Compute the Lorenz curve."""
+    data_sorted = np.sort(data)
+    cumulative = np.cumsum(data_sorted) / data_sorted.sum()
+    cumulative = np.insert(cumulative, 0, 0)  # Add (0,0) to the curve
+    return cumulative
+
+def gini_coefficient(data):
+    """Compute the Gini coefficient."""
+    data_sorted = np.sort(data)
+    n = len(data)
+    cumulative = np.cumsum(data_sorted) / data_sorted.sum()
+    gini_index = 1 - 2 * np.trapz(cumulative, dx=1/n)
+    return gini_index
+
+def compute_gwr_cv_metrics(coords, y, X, bandwidths, kernel='gaussian', k=5 , exclude_intercept=True):
+    """
+    For each candidate bandwidth, perform k-fold CV and compute:
+      - Average MSE on the test folds
+      - Average proportion of statistically significant coefficients
+        (based on the filtered t-values from each local fit)
+    
+    Args:
+        coords (list or np.array): Spatial coordinates (n,2) as list of tuples or array.
+        y (np.array): Target variable (n,).
+        X (np.array): Feature matrix (n,p).
+        bandwidths (iterable): Candidate bandwidth values.
+        kernel (str): 'gaussian' or 'bisquare'.
+        k (int): Number of folds.
+        exclude_intercept (bool): If True, compute significance only on the explanatory variables (exclude intercept).
+    
+    Returns:
+        mse_values (list): Average MSE for each bandwidth.
+        signif_values (list): Average proportion of significant coefficients for each bandwidth.
+    """
+    # Ensure coords is an np.array
+    coords_arr = np.array(coords)
+    
+    kf = KFold(n_splits=k, shuffle=True, random_state=42)
+    mse_values = []
+    signif_values = []
+    
+    for bw in bandwidths:
+        fold_mse = []
+        fold_signif = []
+        
+        for train_idx, test_idx in kf.split(coords_arr):
+            # Extract train/test data using the indices from splitting coords
+            coords_train = coords_arr[train_idx]
+            coords_test = coords_arr[test_idx]
+            X_train, X_test = X[train_idx], X[test_idx]
+            y_train, y_test = y[train_idx], y[test_idx]
+            
+            # Fit the model on the training set
+            gwr_model = GWR(coords_train, y_train, X_train, bw, kernel=kernel)
+            gwr_results = gwr_model.fit()
+            
+            # Use the model's predict method for out-of-sample predictions.
+            # Note: predict() is a method on the GWR model instance.
+            pred_results = gwr_model.predict(coords_test, X_test)
+            y_pred = pred_results.predictions.flatten()
+            
+            # Compute the MSE for this fold
+            mse_fold = np.mean((y_test.flatten() - y_pred)**2)
+            fold_mse.append(mse_fold)
+            
+            # Compute the proportion of significant coefficients.
+            # Use filter_tvals() to set non-significant t-values to 0.
+            # gwr_results.filter_tvals() returns an array of "corrected" t-values.
+            tvals_corr = gwr_results.filter_tvals()
+            # Option: Exclude the intercept (first column) if desired:
+            if exclude_intercept:
+                tvals_corr = tvals_corr[:, 1:]
+            
+            # Determine significance: here we assume that a t-value of 0 means non-significant.
+            # (This is how filter_tvals() is designed.)
+            signif_mask = tvals_corr != 0
+            prop_signif = np.mean(signif_mask)  # overall proportion of significant coefficients in this fold
+            fold_signif.append(prop_signif)
+        
+        # Average over folds for this bandwidth:
+        mse_values.append(np.mean(fold_mse))
+        signif_values.append(np.mean(fold_signif))
+        print(f"Bandwidth: {bw}, CV MSE: {np.mean(fold_mse):.5f}, % Significant: {np.mean(fold_signif)*100:.1f}%")
+    
+    return mse_values, signif_values
+
+def plot_mse_signif(mse, significance, bw):
+    fig, ax1 = plt.subplots(figsize=(10, 6))
+
+    color = 'tab:blue'
+    ax1.set_xlabel('Bandwidth')
+    ax1.set_ylabel('CV MSE', color=color)
+    ax1.plot(bandwidths, mse, marker='o', color=color, label='CV MSE')
+    ax1.tick_params(axis='y', labelcolor=color)
+
+    ax2 = ax1.twinx()  # create a second y-axis that shares the same x-axis
+    color = 'tab:red'
+    ax2.set_ylabel('% Significant Coefficients', color=color)
+    # Convert proportion to percentage:
+    ax2.plot(bandwidths, np.array(significance)*100, marker='s', color=color, label='% Significant')
+    ax2.tick_params(axis='y', labelcolor=color)
+
+    fig.tight_layout()
+    plt.title('CV MSE and Local Significance vs. Bandwidth')
+    plt.show()
+
+def plot_metrics_by_band(results_df):
+    fig, axes = plt.subplots(3, 1, figsize=(10, 15), sharex=True)
+    # Adj R2 RED
+    axes[0].plot(results_df['Bandwidth'], results_df['Adj_R2'], label="Adj R2", color='b')
+    axes[0].set_ylabel("Adj R2")
+    axes[0].legend()
+    axes[0].grid(True)
+
+    # ENP RED
+    axes[1].plot(results_df['Bandwidth'], results_df['Effective Parameters'], label="Effective Parameters", color='g')
+    axes[1].set_ylabel("Effective Parameters")
+    axes[1].legend()
+    axes[1].grid(True)
+
+    # AICc RED
+    axes[2].plot(results_df['Bandwidth'], results_df['AICc'], label="AICc", color='r')
+    axes[2].set_xlabel("Bandwidth")
+    axes[2].set_ylabel("AICc")
+    axes[2].legend()
+    axes[2].grid(True)
+
+    plt.tight_layout()
+    plt.show()
 
 # import data
 data = os.path.join("..\\data\\final\\ugs_analysis_data.gpkg")
@@ -134,7 +408,7 @@ census = gpd.read_file(data, layer='census_for_analysis')
 # SELECTING / CREATING VARIABLES FOR REGRESSION ANALYSIS ###
 
 census['log_price'] = np.log(census['price_mean'])
-census['price_std'] = (census['log_price'] - census['log_price'].mean()) / census['log_price'].std()
+census['price_std'] = (census['log_price'] - census['log_price'].min()) /(census['log_price'].max() -census['log_price'].min())
 
 lower_wage = ['cleaning_workers', 'construction_workers', 'transport_machinery_workers',
     'production_process_workers', 'agri_workers', 'service_workers' ]
@@ -175,12 +449,7 @@ for measure in accessibility_measures:  # normalize accessibility indexes
     max_val = census[measure].max()
     census[measure + '_norm'] = (census[measure] - min_val) / (max_val - min_val)
     
-def lorenz_curve(data):
-    """Compute the Lorenz curve."""
-    data_sorted = np.sort(data)
-    cumulative = np.cumsum(data_sorted) / data_sorted.sum()
-    cumulative = np.insert(cumulative, 0, 0)  # Add (0,0) to the curve
-    return cumulative
+
 
 
 # LORENZ CURVE PLOT
@@ -201,15 +470,6 @@ plt.legend()
 plt.grid(True)
 plt.show()
 
-# GINI INDEX
-def gini_coefficient(data):
-    """Compute the Gini coefficient."""
-    data_sorted = np.sort(data)
-    n = len(data)
-    cumulative = np.cumsum(data_sorted) / data_sorted.sum()
-    gini_index = 1 - 2 * np.trapz(cumulative, dx=1/n)
-    return gini_index
-
 # compute Gini index for each accessibility measure
 for measure in accessibility_measures:
     data = census[measure + '_norm'].dropna().values
@@ -219,7 +479,7 @@ for measure in accessibility_measures:
 
 #####################################################################################
 # EXPLORATORY DATA ANALYSIS #########################################################
-# TODO associate ward names to parks using wards layer. Use it for visualizations
+
 
 # check issue in population distributions: based on results fixe the e2sfca.py
 pd.set_option('display.max_columns', None)
@@ -257,7 +517,7 @@ proportions = ['prop_o65_pop','prop_o75_pop', 'prop_foreign_pop','prop_managers'
                'prop_15_64','prop_1hh','prop_hh_head20']
 
 for attribute in proportions:
-    problematic_census.update(census[census[attribute]>1]["KEY_CODE_3"])
+    problematic_census.update(census[census[attribute]>=1]["KEY_CODE_3"])
 
 census = census[~census['KEY_CODE_3'].isin(problematic_census)]
 
@@ -408,15 +668,15 @@ rdata['longitude'] = rdata['centroid'].x
 rdata['latitude'] = rdata['centroid'].y
 coords = list(zip(rdata['longitude'], rdata['latitude']))
 
-
 # BASIC GWR REGRESSION ############################################################################
-X = rdata[['prop_young_pop', 'prop_o65_pop', 'prop_foreign_pop', 'prop_hh_only_elderly','prop_managers',
-           'prop_low_wage','prop_uni_graduates','price_std']].values
+naive_vars = ['prop_young_pop', 'prop_o65_pop', 'prop_foreign_pop', 'prop_hh_only_elderly','prop_managers',
+           'prop_low_wage','prop_uni_graduates','price_std']
+
+X = rdata[naive_vars].values
 y = rdata['log_full_ugs_accessibility_norm'].values.reshape(-1, 1) # necessary for gwr (othersize size is [7126,])
 bw = mgwr.sel_bw.Sel_BW(coords, y, X).search() # optimal bandwith selection
 # model fitting
-gwr_model = GWR(coords, y, X, bw)
-gwr_results = gwr_model.fit()
+gwr_results = run_gwr(rdata, naive_vars, bw, y='full')
 gwr_results.summary()
 
 #       DIAGNOSTICS ##########################################################################
@@ -844,136 +1104,23 @@ plt.show()
 
 bandwidths = np.arange(0, 3500, 50)
 bw_red = check_bandwidths(y, X_red, bandwidths)
+bw_pca = check_bandwidths(y, Xpca, bandwidths)
 
-# bandwidth and adj_R2
-plt.figure(figsize=(10,8))
-plt.plot(bw_red['Bandwidth'], bw_red['Adj_R2'])
-plt.xlabel('Bandwidth')
-plt.ylabel('Adj R2')
-plt.legend()
-plt.grid(True)
-plt.show()
-
-# bandwidth and number of effective parameters 
-plt.figure(figsize=(10,8))
-plt.plot(bw_red['Bandwidth'], bw_red['Effective Parameters'])
-plt.xlabel('Bandwidth')
-plt.ylabel('Effective_Parameters')
-plt.legend()
-plt.grid(True)
-plt.show()
-
-# bandwidth and the AICc
-plt.figure(figsize=(10,8))
-plt.plot(bw_red['Bandwidth'], bw_red['AICc'])
-plt.xlabel('Bandwidth')
-plt.ylabel('AICc')
-plt.legend()
-plt.grid(True)
-plt.show()
+   
+plot_metrics_by_band(bw_pca)
 
 # EVALUATE COEFFICIENTS BY BANDWIDTH
 cols_reduced = ['prop_foreign_pop', 'prop_young_pop' ,'prop_hh_only_elderly',
                'prop_managers','price_std' ]
 cols_pca = ['PC1','PC2','PC3' ]
 
-plot_bandwidth_effect(rdata, cols_reduced, 'prop_mangers', bws=[60, 200, 500, 1000, 2000, 3000])
+plot_bandwidth_effect(rdata, cols_reduced, 'prop_hh_only_elderly', bws=[60, 200, 500, 1000, 2000, 3000])
+plot_bandwidth_effect(rdata, cols_reduced, 'price_std') 
 plot_bandwidth_effect(rdata, cols_pca, 'PC1')
-plot_bandwidth_effect(rdata, cols_pca, 'PC1', bws=[60, 200, 500, 1000, 2000, 3000])
+plot_bandwidth_effect(rdata, cols_pca, 'PC3')
 
 
 # CROSS VALIDATION #########################################
-def compute_gwr_cv_metrics(coords, y, X, bandwidths, kernel='gaussian', k=5): #, exclude_intercept=True
-    """
-    For each candidate bandwidth, perform k-fold CV and compute:
-      - Average MSE on the test folds
-      - Average proportion of statistically significant coefficients
-        (based on the filtered t-values from each local fit)
-    
-    Args:
-        coords (list or np.array): Spatial coordinates (n,2) as list of tuples or array.
-        y (np.array): Target variable (n,).
-        X (np.array): Feature matrix (n,p).
-        bandwidths (iterable): Candidate bandwidth values.
-        kernel (str): 'gaussian' or 'bisquare'.
-        k (int): Number of folds.
-        exclude_intercept (bool): If True, compute significance only on the explanatory variables (exclude intercept).
-    
-    Returns:
-        mse_values (list): Average MSE for each bandwidth.
-        signif_values (list): Average proportion of significant coefficients for each bandwidth.
-    """
-    # Ensure coords is an np.array
-    coords_arr = np.array(coords)
-    
-    kf = KFold(n_splits=k, shuffle=True, random_state=42)
-    mse_values = []
-    signif_values = []
-    
-    for bw in bandwidths:
-        fold_mse = []
-        fold_signif = []
-        
-        for train_idx, test_idx in kf.split(coords_arr):
-            # Extract train/test data using the indices from splitting coords
-            coords_train = coords_arr[train_idx]
-            coords_test = coords_arr[test_idx]
-            X_train, X_test = X[train_idx], X[test_idx]
-            y_train, y_test = y[train_idx], y[test_idx]
-            
-            # Fit the model on the training set
-            gwr_model = GWR(coords_train, y_train, X_train, bw, kernel=kernel)
-            gwr_results = gwr_model.fit()
-            
-            # Use the model's predict method for out-of-sample predictions.
-            # Note: predict() is a method on the GWR model instance.
-            pred_results = gwr_model.predict(coords_test, X_test)
-            y_pred = pred_results.predictions.flatten()
-            
-            # Compute the MSE for this fold
-            mse_fold = np.mean((y_test.flatten() - y_pred)**2)
-            fold_mse.append(mse_fold)
-            
-            # Compute the proportion of significant coefficients.
-            # Use filter_tvals() to set non-significant t-values to 0.
-            # gwr_results.filter_tvals() returns an array of "corrected" t-values.
-            tvals_corr = gwr_results.filter_tvals()
-            # Option: Exclude the intercept (first column) if desired:
-            if exclude_intercept:
-                tvals_corr = tvals_corr[:, 1:]
-            
-            # Determine significance: here we assume that a t-value of 0 means non-significant.
-            # (This is how filter_tvals() is designed.)
-            signif_mask = tvals_corr != 0
-            prop_signif = np.mean(signif_mask)  # overall proportion of significant coefficients in this fold
-            fold_signif.append(prop_signif)
-        
-        # Average over folds for this bandwidth:
-        mse_values.append(np.mean(fold_mse))
-        signif_values.append(np.mean(fold_signif))
-        print(f"Bandwidth: {bw}, CV MSE: {np.mean(fold_mse):.5f}, % Significant: {np.mean(fold_signif)*100:.1f}%")
-    
-    return mse_values, signif_values
-def plot_mse_signif(mse, significance, bw):
-    fig, ax1 = plt.subplots(figsize=(10, 6))
-
-    color = 'tab:blue'
-    ax1.set_xlabel('Bandwidth')
-    ax1.set_ylabel('CV MSE', color=color)
-    ax1.plot(bandwidths, mse, marker='o', color=color, label='CV MSE')
-    ax1.tick_params(axis='y', labelcolor=color)
-
-    ax2 = ax1.twinx()  # create a second y-axis that shares the same x-axis
-    color = 'tab:red'
-    ax2.set_ylabel('% Significant Coefficients', color=color)
-    # Convert proportion to percentage:
-    ax2.plot(bandwidths, np.array(significance)*100, marker='s', color=color, label='% Significant')
-    ax2.tick_params(axis='y', labelcolor=color)
-
-    fig.tight_layout()
-    plt.title('CV MSE and Local Significance vs. Bandwidth')
-    plt.show()
-
 
 # Define bandwidths to test
 bandwidths = np.arange(50, 3000, 100)  # Test bandwidths from 500 to 5000 in steps of 500
@@ -981,73 +1128,421 @@ bandwidths = np.arange(50, 3000, 100)  # Test bandwidths from 500 to 5000 in ste
 # Compute CV metrics
 mse_vals, signif_vals = compute_gwr_cv_metrics(coords, y, X_red, bandwidths, kernel='gaussian', k=5)
 plot_mse_signif(mse_vals, signif_vals, bandwidths)
-
-# Test MSE with PCA
 pca_mse, pca_sign = compute_gwr_cv_metrics(coords, y, Xpca, bandwidths)
 plot_mse_signif(pca_mse, pca_sign, bandwidths)
 
 # Check local coeff significance
-def plot_local_coeff(data, varlist, bw):
-    """Takes a gdf, list of variables and bandwidth. Plots the local coefficients
-    NB: varlist automatically includes the intercept
-    """
-    X_values = data[varlist].values
-    y = data['log_full_ugs_accessibility_norm'].values.reshape(-1, 1)
-    gwr_results = GWR(coords, y, X_values, bw).fit()
-    
-    results_df = data[['KEY_CODE_3', 'geometry','longitude','latitude']]
-    filter_tc = gwr_results.filter_tvals()  # Compute t-values once
-    varlist.insert(0,'Intercept')
-    for i, var in enumerate(varlist):
-        results_df[f'{var}_param'] = gwr_results.params[:, i]  # Raw coefficients
-        results_df[f'{var}_param_tc'] = filter_tc[:, i]  # Corrected t-values
+cols_pca = ['PC1', 'PC2', 'PC3']
+cols_reduced = ['prop_foreign_pop', 'prop_young_pop', 'prop_hh_only_elderly', 'prop_managers', 'price_std']
+plot_local_coeff(rdata, cols_pca, 500 )
+plot_local_coeff(rdata, cols_pca, 2000 )
+plot_local_coeff(rdata, cols_reduced, 500)
+plot_local_coeff(rdata, cols_reduced, 2000)
 
-    # Create subplots (each variable has 2 plots: raw & corrected)
-    fig, axes = plt.subplots(len(varlist), 2, figsize=(16, 32))  # 8 variables, 2 columns
+# plot local fits
+plot_local_fit(GWR(coords, y, Xpca, 500).fit())
+plot_local_fit(GWR(coords, y, Xpca, 2000).fit())
+plot_local_fit(GWR(coords, y, Xpca, 4000).fit())
+plot_local_fit(GWR(coords, y, X_red, 500).fit())
+plot_local_fit(GWR(coords, y, X_red, 2000).fit())
+plot_local_fit(GWR(coords, y, X_red, 4000).fit())
 
-    for i, var in enumerate(varlist):
-        # Row index for each variable
-        row = i  
-
-        # Plot raw GWR coefficients
-        results_df.plot(f'{var}_param', ax=axes[row, 0], legend=True,
-                    edgecolor='black', alpha=0.65, linewidth=0.5)
-        axes[row, 0].set_title(f'Raw GWR Coefficients: {var}')
-        axes[row, 0].axis('off')
-
-        # Plot corrected coefficients (non-significant areas in grey)
-        results_df.plot(f'{var}_param', ax=axes[row, 1], legend=True,
-                    edgecolor='black', alpha=0.65, linewidth=0.5)
-        results_df[results_df[f'{var}_param_tc'] == 0].plot(color='grey', ax=axes[row, 1], 
-                                                    edgecolor='black', linewidth=0.5)  
-        axes[row, 1].set_title(f'Corrected GWR Coefficients: {var}')
-        axes[row, 1].axis('off')
-
-    #plt.suptitle('GWR Results: Raw vs. Corrected Coefficients', fontsize=18)
-    plt.tight_layout()
-    plt.show()
-
-plot_local_coeff(rdata, ['PC1', 'PC2','PC3'], 2000)
-plot_local_coeff(rdata, cols_reduced, 60)
-plot_local_coeff(rdata, cols_reduced, 1500)
-
-
-
-# TODO Geographic EDA
-# TODO model selection in R -> LASSO 
 # TODO after the regression check for spatial non-stationarity
 # robust GWR -> for outliers
 # mixed GWR -> for variables that don't vary locally
+    
+pca_multi = compute_multisignificance(rdata,['PC1','PC2','PC3'],bandwidths)
+red_multi = compute_multisignificance(rdata, cols_reduced, bandwidths)
+plot_multisignificance(pca_multi)
+plot_multisignificance(red_multi)
+
+# CHECK COEFFICIENTS' STABILITY 
+
+def compute_coefficient_variation(data, varlist, bws, y='full'):
+    coords = list(zip(data['longitude'], data['latitude']))
+    X_values = data[varlist].values
+    y_values = data['log_full_ugs_accessibility_norm'].values.reshape(-1, 1) if y == 'full' else data['log_vl_ugs_accessibility_norm'].values.reshape(-1, 1)
+    coeffs = {var: [] for var in varlist}
+
+    for bw in bws:
+        gwr_results = GWR(coords, y_values, X_values, bw).fit()
+        for i, var in enumerate(varlist):
+            coeffs[var].append(gwr_results.params[:, i + 1].mean())  # Mean coefficient per bandwidth
+
+    coeff_df = pd.DataFrame(coeffs, index=bws)
+    coeff_df.plot(marker='o', linestyle='-')
+    plt.xlabel("Bandwidth")
+    plt.ylabel("Mean Coefficient Value")
+    plt.title("Coefficient Stability Across Bandwidths")
+    plt.show()
+    
+bandwidths = range(0,3001,25)
+cols_reduced = ['prop_foreign_pop', 'prop_young_pop', 'prop_hh_only_elderly', 'prop_managers', 'price_std']
+compute_coefficient_variation(rdata, cols_reduced, bandwidths)
+
+def bootstrap_gwr(data, varlist, bw, n_bootstraps=100, y='full'):
+    coeffs = {var: [] for var in varlist}
+
+    for _ in range(n_bootstraps):
+        # Resample the data
+        sample = resample(data, replace=True)
+
+        # Extract resampled coordinates, X, and y
+        boot_coords = list(zip(sample['longitude'], sample['latitude']))
+        boot_X = sample[varlist].values
+        if y == 'full':
+            boot_y = sample['log_full_ugs_accessibility_norm'].values.reshape(-1, 1)
+        elif y == 'vl':
+            boot_y = sample['log_vl_ugs_accessibility_norm'].values.reshape(-1, 1)
+        else: 
+            raise ValueError
+        # Fit GWR on bootstrapped sample
+        gwr_model = GWR(boot_coords, boot_y, boot_X, bw)
+        gwr_results = gwr_model.fit()
+
+        # Store mean coefficients from the sample
+        for i, var in enumerate(varlist):
+            coeffs[var].append(gwr_results.params[:, i + 1].mean())  # Exclude intercept
+
+    # Convert results to DataFrame
+    coeff_df = pd.DataFrame(coeffs)
+
+    # Compute confidence intervals
+    conf_intervals = coeff_df.quantile([0.025, 0.975])
+    print(conf_intervals)
+
+    return coeff_df
+
+# Check how local coefficients change:
+# RATIONALE : checking just the 0.025 and 0.975 intervals does not make to much sense:
+#             as seen in the sensitivity analysis, some regressors have different sign across the study area
+#             high income is positively associated to increased accessibility in central tokyo but negatively in the north
+#             likely this is due to the type of the UGS contributing to accessibility: in the north they are not attractive
+
+# with bootstrapping and spatial data I have issues associating values back to the original unit. 
+# for this reason I add to rdata the "KEY_CODE_3" column
+
+def bootstrap_local_coefficients(data, varlist, bw, y='full', n_bootstraps=100):
+    """
+    Performs bootstrapping to estimate local coefficients for each observation,
+    using the unique identifier "KEY_CODE_3" to align results.
+    
+    Parameters:
+      data (GeoDataFrame): Must contain 'KEY_CODE_3', 'longitude', 'latitude',
+                           the dependent variable 'log_full_ugs_accessibility_norm',
+                           and predictors.
+      varlist (list): List of predictor variable names.
+      bw (float): Bandwidth for the GWR model.
+      n_bootstraps (int): Number of bootstrap iterations.
+      
+    Returns:
+      boot_df (DataFrame): DataFrame with columns:
+         - 'KEY_CODE_3'
+         - One column per variable in varlist containing lists of bootstrapped coefficient estimates.
+    """
+    # Ensure the data is sorted by KEY_CODE_3 so we have a consistent order.
+    data_sorted = data.sort_values('KEY_CODE_3').reset_index(drop=True)
+    uid = data_sorted['KEY_CODE_3'].values
+    n = len(data_sorted)
+    
+    # Create a dictionary to store lists of coefficients per observation for each variable.
+    # We will store a list for each unique KEY_CODE_3.
+    boot_coeffs = {var: {id_: [] for id_ in uid} for var in varlist}
+    
+    for b in range(n_bootstraps):
+        # Resample the data (maintaining the KEY_CODE_3 for matching later)
+        sample = resample(data_sorted, replace=True, n_samples=n, random_state=b)
+        
+        # Extract coordinates, predictors (X), and dependent variable (y)
+        boot_coords = list(zip(sample['longitude'], sample['latitude']))
+        boot_X = sample[varlist].values
+        if y == 'full':
+            boot_y = sample['log_full_ugs_accessibility_norm'].values.reshape(-1, 1)
+        elif y=='vl':
+            boot_y = sample['log_vl_ugs_accessibility_norm'].values.reshape(-1, 1)
+        else:
+            raise ValueError('y must be either "full" or "vl" (for very large parks)')
+        # Fit GWR on the bootstrap sample
+        gwr_model = GWR(boot_coords, boot_y, boot_X, bw)
+        gwr_results = gwr_model.fit()
+        
+        # Attach the KEY_CODE_3 from the bootstrap sample
+        sample_ids = sample['KEY_CODE_3'].values
+        
+        # For each observation in the bootstrap sample, store its estimated coefficients
+        for i, uid_val in enumerate(sample_ids):
+            for j, var in enumerate(varlist):
+                # gwr_results.params: intercept is column 0, then predictors in order
+                boot_coeffs[var][uid_val].append(gwr_results.params[i, j+1])
+    
+    # Convert the results to a DataFrame where each row corresponds to a unique KEY_CODE_3
+    # and each variable column contains the list of bootstrap estimates.
+    boot_results = pd.DataFrame({'KEY_CODE_3': uid})
+    for var in varlist:
+        # Compute the standard deviation for each KEY_CODE_3 from its list of estimates
+        boot_results[var + '_std'] = boot_results['KEY_CODE_3'].apply(
+            lambda id_: np.std(boot_coeffs[var][id_])
+        )
+    
+    return boot_results
+
+def merge_bootstrap_results(gdf, boot_results):
+    """
+    Merge the bootstrap results (e.g., standard deviations) back into the original GeoDataFrame.
+    """
+    # Assuming gdf is a GeoDataFrame with a unique KEY_CODE_3 column.
+    merged = gdf.merge(boot_results, on='KEY_CODE_3', how='left')
+    return merged
+
+boot60 = bootstrap_local_coefficients(rdata, cols_reduced, 60, "full", 100)
+
+data_polygons = rdata[['geometry','KEY_CODE_3']]
+
+merge1 = merge_bootstrap_results(data_polygons,boot60)
 
 
-# TODO -> it is impossile that with 50 bandiwdth 38% of the coefficients are significant -> the plots are all grey!
-# set minimum bandwidth in automatic selection | Try with non-adaptive too!
+merge1.plot('prop_high_wage_std', legend = True) 
+ax = plt.gca()
+ax.set_title("high_wage_stdde")
+ax.get_xaxis().set_visible(False)
+ax.get_yaxis().set_visible(False)
+plt.show()
+
+def plot_local_std(data, varlist, bw, y='full'):
+    """Bootstraps GWR model and plots the standard deviation of each coefficient.
+    
+    Args:
+        data (GeoDataFrame): gdf including: id (KEY_CODE_3), geometry, variables in varlist.
+        varlist (list): List of the regressors.
+        bw (int): Bandwidth used for the GWR.
+        y (str, optional): Accessibility index used: 'full' = all parks, 'vl'= only biggest parks. Defaults to 'full'.
+    """
+    boot = bootstrap_local_coefficients(data, varlist, bw, y, 100)
+    data_polygons = data[['geometry', 'KEY_CODE_3']]
+    df = merge_bootstrap_results(data_polygons, boot)
+    
+    # Determine which columns to plot: only those ending with '_std'
+    plot_cols = [col for col in df.columns if col.endswith('_std')]
+    n_vars = len(plot_cols)
+    max_cols = 3
+    n_cols = min(n_vars, max_cols)
+    n_rows = math.ceil(n_vars / n_cols)
+    
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(5*n_cols, 5*n_rows))
+    # Flatten axes for consistent indexing
+    if n_vars == 1:
+        axes = [axes]
+    else:
+        axes = axes.flatten()
+    
+    for i, col in enumerate(plot_cols):
+        ax = axes[i]
+        # Plot without legend first.
+        df.plot(column=col, cmap='viridis', legend=False, ax=ax)
+        ax.set_title(f"Local Std: {col}")
+        ax.axis("off")
+        
+        # Create a colorbar for this subplot.
+        # Get min and max from the column values.
+        vmin = df[col].min()
+        vmax = df[col].max()
+        norm = mpl.colors.Normalize(vmin=vmin, vmax=vmax)
+        sm = mpl.cm.ScalarMappable(cmap='viridis', norm=norm)
+        sm._A = []  # dummy array for ScalarMappable
+        
+        # Add the colorbar to the axis. Adjust fraction and pad as needed.
+        cbar = fig.colorbar(sm, ax=ax, fraction=0.036, pad=0.04)
+        cbar.ax.tick_params(labelsize=8)
+    
+    # Hide any unused subplots
+    for j in range(i+1, len(axes)):
+        axes[j].axis("off")
+    
+    plt.tight_layout()
+    plt.show()
+
+# local standard deviations using bw = 60
+plot_local_std(rdata, cols_reduced, 1000, y='full')
 
 
 
+# check global std. dev. of each variable as bandwidth varies
+def plot_mean_std_by_bw(data, varlist, bw_values, y='full', n_bootstraps=100):
+    """
+    For each candidate bandwidth in bw_values, run the bootstrap to compute local 
+    standard deviations and then compute the mean standard deviation across all observations 
+    for each variable.
+    
+    Parameters:
+      data (GeoDataFrame): Spatial data with 'KEY_CODE_3', 'longitude', 'latitude', dependent variable, and predictors.
+      varlist (list): List of predictor variable names.
+      bw_values (iterable): A list of candidate bandwidth values.
+      y (str): 'full' or 'vl' (dependent variable selection).
+      n_bootstraps (int): Number of bootstrap iterations.
+      
+    Returns:
+      results_df (DataFrame): A DataFrame with columns 'Bandwidth' and one column for each variable
+                              in varlist containing the mean standard deviation across observations.
+    """
+    # List to store results for each bandwidth.
+    results_list = []
+    
+    for bw in bw_values:
+        # Run the bootstrap function for the given bandwidth
+        boot_results = bootstrap_local_coefficients(data, varlist, bw, y=y, n_bootstraps=n_bootstraps)
+        # boot_results: DataFrame with columns 'KEY_CODE_3' and var+'_std' for each variable.
+        # Compute the mean standard deviation for each variable.
+        mean_std = {}
+        for var in varlist:
+            colname = var + '_std'
+            mean_std[colname] = boot_results[colname].mean()
+        mean_std['Bandwidth'] = bw
+        results_list.append(mean_std)
+        print(f"Bandwidth: {bw} processed.")
+    
+    # Convert list of dictionaries to DataFrame
+    results_df = pd.DataFrame(results_list)
+    plt.figure(figsize=(10, 6))
+    
+    for var in varlist:
+        colname = var + '_std'
+        plt.plot(results_df['Bandwidth'], results_df[colname], marker='o', label=var)
+    
+    plt.xlabel('Bandwidth')
+    plt.ylabel('Mean Standard Deviation')
+    plt.title('Mean Coefficient Standard Deviation vs. Bandwidth')
+    plt.legend()
+    plt.grid(True, linestyle='--', alpha=0.6)
+    plt.show()
 
-gwr_pca_results.filter_tvals()
+bw_values = range(50, 2051, 100)
+plot_mean_std_by_bw(rdata, cols_reduced, bw_values, y='full', n_bootstraps=100)
 
 
-rdata = rdata.drop(columns=['centroid','landfill','arakawa'])
-rdata.to_file('../data/final/regression_data', driver="Geojson")
+# TODO run the following:
+plot_local_std(rdata, cols_reduced, 2000, y='full')
+plot_local_std(rdata, cols_reduced, 4000, y='full')
+bw_values = range(50, 2051, 100)
+plot_mean_std_by_bw(rdata, cols_reduced, bw_values, y='full', n_bootstraps=100)
+
+cols_alt = ['prop_foreign_pop', 'prop_young_pop', 'prop_hh_only_elderly', 'prop_managers',]
+
+alt_results = run_gwr(rdata, cols_alt, 500)
+alt_results.summary()
+plot_local_fit(alt_results)
+plot_local_coeff(rdata, cols_alt, 500)
+alt_results_vl = run_gwr(rdata, cols_alt, 500, 'vl')
+plot_local_fit(alt_results_vl)
+alt_results_vl.summary()
+
+cols_reduced = ['prop_foreign_pop', 'prop_young_pop', 'prop_hh_only_elderly', 'prop_managers', 'price_std']
+
+red_results = run_gwr(rdata, cols_reduced, 500)
+red_results.summary()
+red_results_vl = run_gwr(rdata, cols_reduced, 800, y='vl')
+red_results_vl.summary()
+plot_local_fit(red_results_vl)
+plot_local_coeff(rdata, cols_reduced, 500)
+
+vif_red = pd.DataFrame()
+red_df = rdata[cols_reduced]
+vif_red["Feature"] = red_df.columns
+vif_red["VIF"] = [variance_inflation_factor(red_df.values, i) for i in range(red_df.shape[1])]
+print(vif_red)
+
+cols_final = ['prop_foreign_pop', 'prop_1hh', 'prop_high_wage','prop_young_pop','prop_hh_only_elderly']
+
+def get_vif(data, columns):
+    vif_df = pd.DataFrame()
+    df = data[columns]
+    vif_df["Feature"] = df.columns
+    vif_df["VIF"] = [variance_inflation_factor(df.values, i) for i in range(df.shape[1])]
+    print(vif_df)
+
+get_vif(rdata, cols_alt)
+rdata
+pca_model = run_gwr(rdata, cols_pca, 500)
+pca_model.summary()
+plot_local_fit(pca_model)
+plot_local_coeff(rdata, cols_pca, 500)
+
+
+# FINAL MODELS: reduced and PCA
+from esda.moran import Moran_Local
+
+# REDUCED MODEL #####################################################################
+# 1. Check residuals for spatial autocorrelation:
+bw = 500
+red_model = run_gwr(rdata, cols_reduced, bw)
+pca_model = run_gwr(rdata, cols_pca, 500)
+
+def get_diagnostics(data, model, bw):
+    """Performs regression diagnostics:
+    1. Residuals spatial autocorrelation with Moran I
+    2. QQ plot of residuals and Shapiro-Wilk test
+    3. Residuals heteroscedasticity: Breusch Pagan test
+    
+    Args:
+        data (_gdf_): Geodataframe containing longitude and latitude
+        model (_gwr_model_): obtained by running run_gwr
+        bw (_integer_): Bandwidth used in the GWR model
+    """
+    # check spatial autocollinearity
+    coords = list(zip(data['longitude'], data['latitude']))
+    knn = KNN.from_array(coords, k=bw)
+    w = W(knn.neighbors)
+    residuals = model.resid_response.flatten()  # Ensure 1D array
+    # Compute Moran’s I
+    moran = Moran(residuals, w)
+    print(f"Moran’s I: {moran.I:.3f}, p-value: {moran.p_sim:.3f}") # almost no clustering in the residuals
+
+    # Plot significant clusters (p < 0.05)
+    local_moran = Moran_Local(residuals, w)
+    coords = np.array(coords)
+    plt.scatter(coords[:, 0], coords[:, 1], c=local_moran.q, cmap='viridis', s=1)
+    plt.title("Local Moran's I Clusters")
+    plt.colorbar(label="Cluster Type")
+    plt.show()
+    #1: High-High (high residuals surrounded by high residuals)
+    #2: Low-Low (low residuals surrounded by low residuals)
+    #3: High-Low (high residuals surrounded by low residuals)
+    #4: Low-High (low residuals surrounded by high residuals)
+
+    # 2. Check for residuals normality
+    # qq plot
+    sm.qqplot(residuals, line='s')
+    plt.title('Q-Q Plot of Residuals') 
+    plt.show()
+    # shapiro wilk test
+    stat, p = shapiro(residuals)
+    print(f"Shapiro-Wilk p-value: {p:.3f}")  # p > 0.05 → residuals normal
+    if p > 0.05:
+        print("The residuals are normally distributed")
+    else: 
+        print("The residuals are not normally distributed")
+
+    # 3. Residuals heterosscedasticity
+
+    # plot residuals v. fitted
+    plt.scatter(model.predy, residuals, s=1)
+    plt.axhline(y=0, color='r', linestyle='--')
+    plt.xlabel('Fitted Values')
+    plt.ylabel('Residuals')
+    plt.title('Residuals vs. Fitted')
+    plt.show()
+
+    # Breusch-Pagan test
+    import statsmodels.stats.api as sms
+
+    bp_test = sms.het_breuschpagan(residuals, model.X)
+    print(f"Breusch-Pagan p-value: {bp_test[1]:.3f}")  # p < 0.05 → heteroscedasticity
+    if bp_test[1] < 0.05:
+        print("The residuals are heteroscedastic")
+    else:
+        print("The residuals are homoscedastic")
+    
+get_diagnostics(rdata, red_model, 500)
+get_diagnostics(rdata, pca_model, 500)
+
+
+rdata['price_std'].plot(kind='hist', bins=100)
