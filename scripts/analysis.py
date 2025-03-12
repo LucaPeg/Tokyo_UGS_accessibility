@@ -1213,10 +1213,6 @@ plot_local_fit(GWR(coords, y, Xpca, 4000).fit())
 plot_local_fit(GWR(coords, y, X_red, 500).fit())
 plot_local_fit(GWR(coords, y, X_red, 2000).fit())
 plot_local_fit(GWR(coords, y, X_red, 4000).fit())
-
-# TODO after the regression check for spatial non-stationarity
-# robust GWR -> for outliers
-# mixed GWR -> for variables that don't vary locally
     
 pca_multi = compute_multisignificance(rdata,['PC1','PC2','PC3'],bandwidths)
 red_multi = compute_multisignificance(rdata, cols_reduced, bandwidths)
@@ -1240,10 +1236,11 @@ def compute_coefficient_variation(data, varlist, bws, y='full'):
     coeff_df.plot(marker='o', linestyle='-')
     plt.xlabel("Bandwidth")
     plt.ylabel("Mean Coefficient Value")
-    plt.title("Coefficient Stability Across Bandwidths")
+    plt.title("Coefficient stability across bandwidths")
+    plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
     plt.show()
     
-bandwidths = range(0,3001,25)
+bandwidths = range(0,3001,50)
 cols_reduced = ['prop_foreign_pop', 'prop_young_pop', 'prop_hh_only_elderly', 'prop_managers', 'price_std']
 compute_coefficient_variation(rdata, cols_reduced, bandwidths)
 
@@ -1433,6 +1430,11 @@ plot_local_std(rdata, cols_reduced, 88, y='full')
 plot_local_std(rdata, cols_reduced, 500, y='full')
 plot_local_std(rdata, cols_reduced, 1500, y='full')
 
+plot_local_std(rdata, cols_pca, 50, y='full')
+plot_local_std(rdata, cols_pca, 500, y='full')
+plot_local_std(rdata, cols_pca, 1500, y='full')
+
+
 
 # check global std. dev. of each variable as bandwidth varies
 def plot_mean_std_by_bw(data, varlist, bw_values, y='full', n_bootstraps=100):
@@ -1485,6 +1487,7 @@ def plot_mean_std_by_bw(data, varlist, bw_values, y='full', n_bootstraps=100):
 
 bw_values = range(50, 2051, 100)
 plot_mean_std_by_bw(rdata, cols_reduced, bw_values, y='full', n_bootstraps=100)
+plot_mean_std_by_bw(rdata, cols_pca, bw_values, y='full', n_bootstraps=100) 
 
 # DIAGNOSTICS FUNCTIONS
 def get_vif(data, columns):
@@ -1508,10 +1511,9 @@ def get_diagnostics(data, model, bw):
     coords = list(zip(data['longitude'], data['latitude']))
     knn = KNN.from_array(coords, k=bw)
     w = W(knn.neighbors)
-    residuals = model.resid_response.flatten()  # Ensure 1D array
-    # Compute Moran’s I
-    moran = Moran(residuals, w)
-    print(f"Moran’s I: {moran.I:.3f}, p-value: {moran.p_sim:.3f}") # almost no clustering in the residuals
+    residuals = model.resid_response.flatten() 
+    moran = Moran(residuals, w) # Compute Moran’s I
+    print(f"Moran’s I: {moran.I:.6f}, p-value: {moran.p_sim:.3f}") # almost no clustering in the residuals
 
     # Plot significant clusters (p < 0.05)
     local_moran = Moran_Local(residuals, w)
@@ -1519,6 +1521,7 @@ def get_diagnostics(data, model, bw):
     plt.scatter(coords[:, 0], coords[:, 1], c=local_moran.q, cmap='viridis', s=1)
     plt.title("Local Moran's I Clusters")
     plt.colorbar(label="Cluster Type")
+    plt.axis('off')
     plt.show()
     #1: High-High (high residuals surrounded by high residuals)
     #2: Low-Low (low residuals surrounded by low residuals)
@@ -1586,20 +1589,20 @@ def get_diagnostics(data, model, bw):
 
 
 # FINAL MODELS
-cols_reduced = ['prop_foreign_pop', 'prop_young_pop', 'prop_hh_only_elderly', 'prop_managers', 'price_std']
+cols_reduced = ['prop_foreign_pop', 'prop_young_pop' ,'prop_hh_only_elderly', 'prop_managers']
 cols_pca = ['PC1', 'PC2', 'PC3']
 
 # reduced model full
-red_model = run_gwr(rdata, cols_reduced, 500)
+red_model = run_gwr(rdata, cols_reduced, 600)
 red_model.summary()
-get_diagnostics(rdata, red_model, 500)
+get_diagnostics(rdata, red_model, 600)
 get_vif(rdata, cols_reduced)
 plot_local_fit(red_model)
-plot_local_coeff(rdata, cols_reduced, 500)
+plot_local_coeff(rdata, cols_reduced, 350)
 
-red_model_vl = run_gwr(rdata, cols_reduced, 500, y='vl')
+red_model_vl = run_gwr(rdata, cols_reduced, 600, y='vl')
 red_model_vl.summary()
-get_diagnostics(rdata, red_model_vl, 500)
+get_diagnostics(rdata, red_model_vl, 600)
 plot_local_fit(red_model_vl)
 
 
@@ -1608,7 +1611,7 @@ pca_model = run_gwr(rdata, cols_pca, 500)
 pca_model.summary()
 plot_local_fit(pca_model)
 plot_local_coeff(rdata, cols_pca, 500)
-get_diagnostics(rdata, cols_pca, 500)
+get_diagnostics(rdata, pca_model, 500)
 get_vif(rdata, cols_pca)
 
 pca_model_vl = run_gwr(rdata, cols_pca, 500, y='vl')
@@ -1616,7 +1619,399 @@ pca_model_vl.summary()
 get_diagnostics(rdata, pca_model_vl, 500)
 plot_local_fit(pca_model_vl)
 
+# POST- LEVERAGE EVALUATION
+# REDUCED MODEL
+
+# Extract high leverage points
+red_leverage = red_model.influ  # Extract leverage value
+high_leverage_indices = np.where(red_leverage > 0.3)[0] # set 0.3 as effective thresholds
+high_leverage_points = rdata.iloc[high_leverage_indices]['KEY_CODE_3'].values
+
+# Extract high cook pointrs
+red_cooks = red_model.cooksD
+high_cooks_indices = np.where(red_cooks > 0.03)[0] # set 0.03 as effective threshold
+high_cooks_points = rdata.iloc[high_cooks_indices]['KEY_CODE_3'].values
+
+outlier_ids = np.union1d(high_leverage_points, high_cooks_points)
+
+# Create a new dataset excluding these outliers
+rdata_noout = rdata[~rdata['KEY_CODE_3'].isin(outlier_ids)]
+print("Filtered dataset shape:", rdata_noout.shape)
+
+# Now run the GWR on the filtered dataset
+red_model_noout = run_gwr(rdata_noout, cols_reduced, 600)
+red_model_noout.summary()
+get_diagnostics(rdata_noout, red_model_noout, 600)
+plot_local_fit(red_model_noout)
+red_model_noout_vl = run_gwr(rdata_noout, cols_reduced, 600, y='vl')
+red_model_noout_vl.summary()
+get_diagnostics(rdata_noout, red_model_noout_vl, 600)
+
+# where are the outliers?
+highest_cook = np.where(red_cooks>0.4)[0]
+highest_cook_code = rdata.iloc[highest_cook]['KEY_CODE_3'].values
+outliers = rdata[rdata['KEY_CODE_3'].isin(outlier_ids)]
+outliers[['prop_foreign_pop','prop_young_pop','prop_hh_only_elderly','prop_managers']]
+import contextily as ctx
+def plot_census_points_with_basemap(
+    data,
+    census_list,
+    buffer_factor=1.5,
+    color="red",
+    markersize=10,
+    alpha=0.7,
+    zoom=10,
+    basemap_source=ctx.providers.CartoDB.Positron,
+    title=None
+):
+    """
+    Plot census points on a basemap give KEY_CODE_3 list.
+
+    Parameters:
+        data (GeoDataFrame): census gdf (must include geometries).
+        census_list (list): list of KEY_CODE_3
+        buffer_factor (float): Factor to expand map bounds for zooming out.
+        title (str): Title for the plot.
+        color (str): Color of the points.
+        markersize (int): Size of the points.
+        alpha (float): Transparency of the points.
+        basemap_source: Contextily basemap source.
+        zoom (int): Optional zoom level for the basemap.
+    """
+    census_list = list(census_list)
+    gdf = data[data["KEY_CODE_3"].isin(census_list)]
+    
+    
+    if gdf.crs != "EPSG:3857":
+        gdf = gdf.to_crs(epsg=3857)
+    
+    # get bounds so I can increase them when I have small area
+    bounds = gdf.total_bounds  # [minx, miny, maxx, maxy]
+    
+    
+
+    # Expand the bounds to zoom out
+    x_range = bounds[2] - bounds[0]
+    y_range = bounds[3] - bounds[1]
+
+    expanded_bounds = [
+        bounds[0] - x_range * (buffer_factor - 1),  # Min X
+        bounds[1] - y_range * (buffer_factor - 1),  # Min Y
+        bounds[2] + x_range * (buffer_factor - 1),  # Max X
+        bounds[3] + y_range * (buffer_factor - 1),  # Max Y
+    ]
+
+    # Plot the census points
+    fig, ax = plt.subplots(figsize=(12, 12))
+    gdf.plot(
+        ax=ax,
+        color=color,
+        markersize=markersize,
+        alpha=alpha,
+    )
+
+    # Add the basemap
+    ctx.add_basemap(ax, source=basemap_source, zoom=zoom)
+
+    # Set the expanded bounds as limits
+    ax.set_xlim(expanded_bounds[0], expanded_bounds[2])  # Set x-axis limits
+    ax.set_ylim(expanded_bounds[1], expanded_bounds[3])  # Set y-axis limits
+
+    # Customize the plot
+    ax.set_title(title, fontsize=16)
+    ax.axis("off")  # Turn off axis labels
+
+    # Show the plot
+    plt.show()
+plot_census_points_with_basemap(rdata, outlier_ids)
+
+# PCA MODEL 
+pca_leverage = pca_model.influ  # Extract leverage value
+pca_high_leverage_indices = np.where(pca_leverage > 0.25)[0] # set 0.3 as effective thresholds
+pca_high_leverage_points = rdata.iloc[pca_high_leverage_indices]['KEY_CODE_3'].values
+# Extract high cook pointrs
+pca_cooks = pca_model.cooksD
+pca_high_cooks_indices = np.where(pca_cooks > 0.013)[0] # set 0.03 as effective threshold
+pca_high_cooks_points = rdata.iloc[pca_high_cooks_indices]['KEY_CODE_3'].values
+pca_outlier_ids = np.union1d(pca_high_leverage_points, pca_high_cooks_points)
+# Create a new dataset excluding these outliers
+pca_rdata_noout = rdata[~rdata['KEY_CODE_3'].isin(pca_outlier_ids)]
+# Rerun the model
+pca_model_noout = run_gwr(pca_rdata_noout, cols_pca, 500)
+pca_model_noout.summary()
+get_diagnostics(pca_rdata_noout, pca_model_noout, 500)
+
+pca_crazy = run_gwr(pca_rdata_noout, cols_pca, 4000)
+get_diagnostics(pca_rdata_noout, pca_crazy, 4000)
+
+
+rdata
+
+# ROBUST COEFFICIENTS 
+
+def bootstrap_gwr_coefficients(data, varlist, bw, n_bootstraps=100, y_col='full'):
+    """
+    Performs bootstrap resampling by unique KEY_CODE_3 (i.e. entire observation units) 
+    and fits a GWR model on each replicate. Returns a dataframe with the local coefficient 
+    estimates for each bootstrap replicate.
+    
+    Parameters:
+      data        : pandas DataFrame containing your dataset.
+      varlist     : list of column names to be used as independent variables.
+      bw          : fixed bandwidth (or pre-selected bandwidth) for GWR.
+      n_bootstraps: number of bootstrap replicates to perform.
+      y_col       : column name of the dependent variable.
+      "KEY_CODE_3"     : column name with the unique identifier (KEY_CODE_3).
+      lon_col     : column name for the x-coordinate (longitude).
+      lat_col     : column name for the y-coordinate (latitude).
+    
+    Returns:
+      A pandas DataFrame with columns:
+         - 'bootstrap' (the bootstrap replicate index)
+         - KEY_CODE_3 (unique ID for each observation)
+         - one column for the intercept and one for each independent variable from varlist.
+    """
+    
+    # Get the list of unique IDs
+    unique_ids = data['KEY_CODE_3'].unique()
+    all_bootstrap_results = []
+    
+    for b in range(n_bootstraps):
+        # Sample unique IDs with replacement
+        sampled_ids = np.random.choice(unique_ids, size=len(unique_ids), replace=True)
+        
+        # Select all rows corresponding to the sampled unique IDs
+        # (This assumes that each KEY_CODE_3 represents a complete observation)
+        boot_sample = data[data["KEY_CODE_3"].isin(sampled_ids)].copy()
+        # Optional: sort by the unique identifier so that the output is easier to join later
+        boot_sample.sort_values(by="KEY_CODE_3", inplace=True)
+        
+        # Prepare the coordinates for GWR (as a list of (lon, lat) tuples)
+        coords = list(zip(boot_sample['longitude'], boot_sample['latitude']))
+        # Prepare the independent variables
+        X = boot_sample[varlist].values
+        # Prepare the dependent variable (reshaped as a column vector)
+        if y_col == 'full':
+            y_var = "log_full_ugs_accessibility_norm"
+        elif y_col == 'vl':
+            y_var = 'log_vl_ugs_accessibility_norm'
+        else:
+            raise ValueError("y_col can be either 'full' or 'vl'")
+            
+        y = boot_sample[y_var].values.reshape(-1, 1)
+        
+        # Fit the GWR model using the provided fixed bandwidth
+        gwr_model = GWR(coords, y, X, bw)
+        gwr_results = gwr_model.fit()
+        
+        # Create a dataframe for the coefficients for this bootstrap replicate.
+        # Assume gwr_results.params is an array of shape (n_obs, n_coeff) with the first column as the intercept.
+        coef_df = pd.DataFrame(gwr_results.params, 
+                               columns=['Intercept'] + varlist)
+        # Add the KEY_CODE_3 values (from the bootstrap sample) and the bootstrap replicate number
+        coef_df["KEY_CODE_3"] = boot_sample["KEY_CODE_3"].values
+        coef_df['bootstrap'] = b
+        
+        # Append this replicate's coefficients to the list
+        all_bootstrap_results.append(coef_df)
+    
+    # Combine all replicates into one dataframe
+    final_bootstrap_df = pd.concat(all_bootstrap_results, ignore_index=True)
+    return final_bootstrap_df
+
+red_boot_coeff =bootstrap_gwr_coefficients(rdata_noout, cols_reduced, 600, y_col='full')
+
+def map_bootstrap_subplots(gdf_original, bootstrap_df, coef_vars, key_col='KEY_CODE_3', 
+                           ncols=2, cmap='viridis'):
+    """
+    For each variable in coef_vars (excluding the intercept), this function:
+      1. Computes per-unit median, 2.5th and 97.5th percentiles across bootstraps.
+      2. Merges these summary stats back into the original GeoDataFrame.
+      3. Creates a single figure with subplots for each variable showing the median coefficient.
+    
+    Parameters:
+      gdf_original : GeoDataFrame with geometry and a unique identifier field (key_col).
+      bootstrap_df : DataFrame with bootstrap coefficient results including key_col and a column "bootstrap".
+      coef_vars    : list of coefficient variable names to map (e.g. ['Var1', 'Var2', ...]).
+                     (Exclude 'Intercept' if not desired.)
+      key_col      : unique identifier field common to both datasets.
+      ncols        : number of columns for subplots (default 2).
+      cmap         : colormap for the plots (default 'viridis').
+    
+    Returns:
+      A matplotlib Figure object with the subplots.
+    """
+    
+    # Summarize bootstrap results: group by the unique key and compute summary statistics for each variable.
+    summaries = {}
+    grouped = bootstrap_df.groupby(key_col)
+    for var in coef_vars:
+        summary = grouped[var].agg(median=lambda x: np.median(x),
+                                   ci_lower=lambda x: np.percentile(x, 2.5),
+                                   ci_upper=lambda x: np.percentile(x, 97.5)).reset_index()
+        summaries[var] = summary
+
+    # Determine the number of subplots needed
+    nvars = len(coef_vars)
+    nrows = int(np.ceil(nvars / ncols))
+    
+    fig, axes = plt.subplots(nrows, ncols, figsize=(5*ncols, 4*nrows))
+    # Flatten axes array for easier indexing.
+    if nrows * ncols > 1:
+        axes = axes.flatten()
+    else:
+        axes = [axes]
+    
+    # For each variable, merge the summary with the original GeoDataFrame and plot.
+    for i, var in enumerate(coef_vars):
+        summary = summaries[var]
+        merged = gdf_original.merge(summary, on=key_col, how='left')
+        
+        merged.plot(column='median', ax=axes[i], cmap=cmap, legend=True,
+                    legend_kwds={'label': f"Median {var} Coefficient", "shrink": 0.6})
+        axes[i].set_title(f"{var}", fontsize=12)
+        axes[i].set_axis_off()
+    
+    # Remove any extra empty subplots
+    for j in range(i+1, len(axes)):
+        fig.delaxes(axes[j])
+        
+    fig.tight_layout()
+    plt.show()
+    return fig
+
+# Example usage:
+# Assume gdf_original is your GeoDataFrame with geometry and KEY_CODE_3.
+# Assume boot_coef_df is the bootstrap coefficients DataFrame from bootstrap_gwr_coefficients().
+# And varlist is your list of independent variables (excluding the intercept).
+fig = map_bootstrap_subplots(rdata_noout, red_boot_coeff, coef_vars=cols_reduced, key_col='KEY_CODE_3', ncols=2)
 
 
 
+def create_summary_dict(bootstrap_df, coef_vars, key_col='KEY_CODE_3'):
+    """
+    Creates a summary dictionary for the bootstrap coefficients.
+    
+    Parameters:
+      bootstrap_df : DataFrame obtained from bootstrap_gwr_coefficients().
+      coef_vars    : List of coefficient variable names to summarize (e.g., ['Var1', 'Var2', ...]).
+                     Exclude the intercept if not needed.
+      key_col      : Unique identifier column (default 'KEY_CODE_3').
+    
+    Returns:
+      A dictionary where keys are coefficient names and values are DataFrames with columns:
+         [key_col, f"{var}_median", f"{var}_ci_lower", f"{var}_ci_upper"]
+    """
+    summary_dict = {}
+    grouped = bootstrap_df.groupby(key_col)
+    
+    for var in coef_vars:
+        summary = grouped[var].agg(
+            median=lambda x: np.median(x),
+            ci_lower=lambda x: np.percentile(x, 2.5),
+            ci_upper=lambda x: np.percentile(x, 97.5)
+        ).reset_index()
+        # Rename columns to include the variable name as prefix.
+        summary = summary.rename(columns={
+            'median': f"{var}_median",
+            'ci_lower': f"{var}_ci_lower",
+            'ci_upper': f"{var}_ci_upper"
+        })
+        summary_dict[var] = summary
+        
+    return summary_dict
 
+summary_dict = create_summary_dict(red_boot_coeff, coef_vars=cols_reduced, key_col='KEY_CODE_3')
+def merge_and_plot_sig_coeffs(gdf_original, summary_dict, coef_vars, 
+                              ncols=2, pos_color='blue', neg_color='red', nonsig_color='lightgrey',
+                              legend_title=None, main_title=None):
+    """
+    This function merges bootstrap summary data (median, ci_lower, ci_upper) for a list of coefficient variables
+    with the original GeoDataFrame and then plots subplots (one per variable) where for each unit the fill color depends on
+    whether its 95% CI is entirely positive (pos_color), entirely negative (neg_color), or crosses zero (nonsig_color).
+    
+    Parameters:
+      gdf_original : GeoDataFrame containing original geometry and the key column.
+      summary_dict : Dictionary where keys are coefficient names (matching those in coef_vars) and values are DataFrames
+                     with columns: [key_col, f"{var}_median", f"{var}_ci_lower", f"{var}_ci_upper"].
+      coef_vars    : List of coefficient variable names to plot (exclude the intercept if desired).
+      ncols        : Number of columns for subplots (default 2).
+      pos_color    : Color for units with CI entirely above 0 (default 'blue').
+      neg_color    : Color for units with CI entirely below 0 (default 'red').
+      nonsig_color : Color for units with CI that straddles zero (default 'lightgrey').
+      legend_title : Title for the legend (optional).
+      main_title   : Main title for the figure (optional).
+      
+    Returns:
+      A matplotlib Figure object with the subplots.
+    """
+    # Merge all summary DataFrames into a single GeoDataFrame
+    merged_gdf = gdf_original.copy()
+    for var in coef_vars:
+        if var in summary_dict:
+            merged_gdf = merged_gdf.merge(summary_dict[var], on="KEY_CODE_3", how='left')
+        else:
+            raise ValueError(f"No summary data provided for variable: {var}")
+    
+    # Determine subplot grid dimensions
+    nvars = len(coef_vars)
+    nrows = int(np.ceil(nvars / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(5*ncols, 4*nrows))
+    if nrows*ncols > 1:
+        axes = axes.flatten()
+    else:
+        axes = [axes]
+    
+    # Define colormap mapping for significance
+    cmap_dict = {'positive': pos_color, 'negative': neg_color, 'nonsig': nonsig_color}
+    
+    for i, var in enumerate(coef_vars):
+        # Classify significance based on the confidence interval for the current variable.
+        lower = merged_gdf[f"{var}_ci_lower"]
+        upper = merged_gdf[f"{var}_ci_upper"]
+        merged_gdf['sig'] = np.select([(lower > 0) & (upper > 0),
+                                       (lower < 0) & (upper < 0)],
+                                      ['positive', 'negative'], default='nonsig')
+        # Plot the merged GeoDataFrame; assign color based on significance classification.
+        ax = axes[i]
+        merged_gdf.plot(color=merged_gdf['sig'].map(cmap_dict), ax=ax)
+        ax.set_title(f"{var}", fontsize=12)
+        ax.set_axis_off()
+    
+    # Remove extra axes if any
+    for j in range(i+1, len(axes)):
+        fig.delaxes(axes[j])
+    
+    # Create custom legend handles
+    handles = [mpatches.Patch(color=col, label=lab) for lab, col in cmap_dict.items()]
+    if legend_title is None:
+        legend_title = "Significance"
+    fig.legend(handles=handles, title=legend_title, loc='lower center', ncol=len(cmap_dict), frameon=True)
+    
+    if main_title is not None:
+        fig.suptitle(main_title, fontsize=16)
+    fig.tight_layout(rect=[0, 0.05, 1, 0.95])
+    plt.show()
+    return fig
+
+import matplotlib.patches as mpatches
+fig = merge_and_plot_sig_coeffs(rdata_noout, summary_dict, coef_vars=cols_reduced, ncols=2, main_title="Significant Coefficient Maps")
+
+
+# ON VERY LARGE PARKS
+red_boot_coeff_vl =bootstrap_gwr_coefficients(rdata_noout, cols_reduced, 600, y_col='vl')
+fig = map_bootstrap_subplots(rdata_noout, red_boot_coeff_vl, coef_vars=cols_reduced, key_col='KEY_CODE_3', ncols=2)
+summary_dict_vl = create_summary_dict(red_boot_coeff_vl, coef_vars=cols_reduced, key_col='KEY_CODE_3')
+fig = merge_and_plot_sig_coeffs(rdata_noout, summary_dict_vl, coef_vars=cols_reduced, ncols=2, main_title="Significant Coefficient Maps")
+
+# FOR PCA
+pca_boot_coeff =bootstrap_gwr_coefficients(pca_rdata_noout, cols_pca, 600, y_col='full')
+fig = map_bootstrap_subplots(pca_rdata_noout, pca_boot_coeff, coef_vars=cols_pca, key_col='KEY_CODE_3', ncols=3)
+summary_dict_pca = create_summary_dict(pca_boot_coeff, coef_vars=cols_pca, key_col='KEY_CODE_3')
+fig = merge_and_plot_sig_coeffs(pca_rdata_noout, summary_dict_pca, coef_vars=cols_pca, ncols=3, main_title="Significant PCA coefficients: all parks")
+
+# PCA very large
+pca_boot_coeff =bootstrap_gwr_coefficients(pca_rdata_noout, cols_pca, 600, y_col='vl')
+fig = map_bootstrap_subplots(pca_rdata_noout, pca_boot_coeff, coef_vars=cols_pca, key_col='KEY_CODE_3', ncols=3)
+summary_dict_pca = create_summary_dict(pca_boot_coeff, coef_vars=cols_pca, key_col='KEY_CODE_3')
+fig = merge_and_plot_sig_coeffs(pca_rdata_noout, summary_dict_pca, coef_vars=cols_pca, ncols=3, main_title="Significant PCA coefficients: largest parks")

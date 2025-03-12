@@ -4,3 +4,4 @@ pictures/
 scripts/__pycache__
 scripts/mobile_extract.py 
 scripts/mobile_analysis.py 
+.Rhistory
